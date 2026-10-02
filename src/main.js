@@ -52,6 +52,60 @@ const tcolor = id => { const c = S.teachers[id]?.color; return /^#[0-9a-fA-F]{6}
 const teacherIds = () => Object.keys(S.teachers).sort((a, b) => (S.teachers[a].order ?? 99) - (S.teachers[b].order ?? 99) || tname(a).localeCompare(tname(b)));
 const studentIds = incArch => Object.keys(S.students).filter(id => incArch || !S.students[id].archived).sort((a, b) => sname(a).localeCompare(sname(b)));
 const slotsOf = tid => S.teachers[tid]?.slots || [];
+/* ---------- photos (private bucket, signed URLs) ---------- */
+const photoUrls = {};
+async function refreshPhotoUrls() {
+  const now = Date.now();
+  const paths = [...Object.values(S.teachers), ...Object.values(S.students)].map(x => x.photo).filter(Boolean).filter(pth => !photoUrls[pth] || photoUrls[pth].exp < now + 60000);
+  if (!paths.length) return;
+  const { data, error } = await sb.storage.from('photos').createSignedUrls([...new Set(paths)], 3600);
+  if (error) { console.error(error); return; }
+  for (const r of data || []) if (r.signedUrl) photoUrls[r.path] = { url: r.signedUrl, exp: now + 3500 * 1000 };
+  render();
+}
+const initials = n => String(n || '?').replace(/^(Ms|Mr|Mrs|Dr)\.?\s+/i, '').split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?';
+function avatar(kind, id, size = 28) {
+  const rec = kind === 'teacher' ? S.teachers[id] : S.students[id]; const name = kind === 'teacher' ? tname(id) : sname(id);
+  const url = rec?.photo && photoUrls[rec.photo]?.url;
+  const bg = kind === 'teacher' ? tcolor(id) : 'var(--accent-soft)'; const fg = kind === 'teacher' ? '#fff' : 'var(--accent)';
+  return url ? `<img class="ava" src="${esc(url)}" alt="" width="${size}" height="${size}" style="width:${size}px;height:${size}px" loading="lazy">`
+    : `<span class="ava" aria-hidden="true" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.4)}px;background:${bg};color:${fg}">${esc(initials(name))}</span>`;
+}
+function squareJpeg(file, px = 480) {
+  return new Promise((res, rej) => {
+    const img = new Image(); const u = URL.createObjectURL(file);
+    img.onload = () => { const s = Math.min(img.width, img.height); const c = document.createElement('canvas'); c.width = c.height = px;
+      c.getContext('2d').drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, px, px); URL.revokeObjectURL(u);
+      c.toBlob(b => b ? res(b) : rej(new Error('encode')), 'image/jpeg', 0.85); };
+    img.onerror = () => { URL.revokeObjectURL(u); rej(new Error('That file is not an image we can read.')); };
+    img.src = u;
+  });
+}
+function pickPhoto(kind, id) {
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*';
+  inp.onchange = async () => {
+    const f = inp.files?.[0]; if (!f) return;
+    try {
+      toast('Uploading photo…');
+      const blob = await squareJpeg(f);
+      const path = `${kind}s/${id}/${Date.now()}.jpg`;
+      const { error } = await sb.storage.from('photos').upload(path, blob, { contentType: 'image/jpeg', upsert: false });
+      if (error) { console.error(error); return toast(/row-level|403|Unauthorized/i.test(error.message) ? 'You do not have permission to change this photo.' : 'Could not upload the photo. Try again.'); }
+      await run(sb.from(kind === 'teacher' ? 'teachers' : 'students').update({ photo: path }).eq('id', id), 'Photo updated');
+      renderOverlay(true);
+    } catch (e) { toast(e.message || 'Could not upload the photo.'); }
+  };
+  inp.click();
+}
+const canEditPhoto = (kind, id) => isAdmin() || (kind === 'teacher' && id === myTeacher());
+function photoBlock(kind, id) {
+  const rec = kind === 'teacher' ? S.teachers[id] : S.students[id]; const can = canEditPhoto(kind, id);
+  return `<div class="photoblock">${avatar(kind, id, 72)}${can ? `<div class="row-end" style="justify-content:flex-start"><button class="btn sm" data-photo="${kind}|${esc(id)}">${rec?.photo ? 'Change photo' : 'Add photo'}</button>${rec?.photo ? `<button class="btn sm ghost" data-photo-rm="${kind}|${esc(id)}">Remove photo</button>` : ''}</div>` : ''}</div>`;
+}
+document.addEventListener('click', e => {
+  const a = e.target.closest('[data-photo]'); if (a) { const [k, i] = a.dataset.photo.split('|'); return pickPhoto(k, i); }
+  const r = e.target.closest('[data-photo-rm]'); if (r) { const [k, i] = r.dataset.photoRm.split('|'); confirmBox('Remove this photo? The old photo stays in storage and the change is recorded in History.', () => run(sb.from(k === 'teacher' ? 'teachers' : 'students').update({ photo: null }).eq('id', i), 'Photo removed').then(() => renderOverlay(true)), 'Remove'); }
+});
 function intlPhone(p) { let d = String(p || '').replace(/\D/g, ''); if (d.startsWith('00')) d = d.slice(2); if (d.length === 8) d = '965' + d; return d.length >= 8 ? d : ''; }
 function phoneLinks(p, big) {
   const d = intlPhone(p); if (!d) return esc(p || '–');
@@ -108,10 +162,10 @@ async function loadAll() {
   const bad = q.find(r => r.error); if (bad) { console.error(bad.error); toast('Could not load the studio data. Refresh to try again.'); return; }
   const [t, s, p, l, sl, st, pr, pay] = q.map(r => r.data);
   const teachers = {};
-  for (const r of t) teachers[r.id] = { name: r.name, subjects: r.subjects, color: r.color, notes: r.notes, order: r.sort_order, slots: [] };
+  for (const r of t) teachers[r.id] = { name: r.name, subjects: r.subjects, color: r.color, notes: r.notes, order: r.sort_order, photo: r.photo, slots: [] };
   for (const r of sl) teachers[r.teacher_id]?.slots.push({ id: r.id, day: r.day, start: r.start_time, dur: r.dur, studentId: r.student_id, label: r.label, status: r.status, note: r.note });
   const students = {};
-  for (const r of s) students[r.id] = { name: r.name, guardian: r.guardian, phone: r.phone, regForm: r.reg_form, notes: r.notes, archived: r.archived };
+  for (const r of s) students[r.id] = { name: r.name, guardian: r.guardian, phone: r.phone, regForm: r.reg_form, notes: r.notes, archived: r.archived, photo: r.photo };
   const packages = {};
   for (const r of p) packages[r.id] = { studentId: r.student_id, teacherId: r.teacher_id, subject: r.subject, kind: r.kind, sessions: r.sessions, perWeek: r.per_week, start: r.start_date, end: r.end_date, term: r.term, payment: r.payment, paidNote: r.paid_note, price: r.price, notes: r.notes, closed: r.closed, log: [] };
   for (const r of l) packages[r.package_id]?.log.push({ id: r.id, d: r.lesson_date, s: r.status, n: r.note });
@@ -119,6 +173,7 @@ async function loadAll() {
   Object.assign(S, { teachers, students, packages, profiles: pr || [], payments: pay || [], loaded: true });
   if (st) S.settings = { schoolName: st.school_name, term: st.term, lowThreshold: st.low_threshold };
   render();
+  refreshPhotoUrls();
 }
 let reloadTimer = null; let channel = null;
 const scheduleReload = () => { clearTimeout(reloadTimer); reloadTimer = setTimeout(() => { loadAll(); if (S.tab === 'history' && isAdmin() && S.hist.rows.length <= 200) loadHistory(true); if (tl.key && drawer && (drawer.type === 'student' || drawer.type === 'package') && isAdmin()) { const [k, i] = tl.key.split('|'); loadTimeline(k, i); } }, 350); };
@@ -301,10 +356,10 @@ function renderToday() {
       const p = pkgForDate(s.studentId, t, d); const e = entryFor(p, d); const st = p ? stats(p) : null;
       const info = p ? `${KINDS[p.kind] || ''} · ${st.used} of ${st.total} used${st.left <= 0 ? ' · <span style="color:var(--bad)">finished</span>' : st.state === 'low' ? ` · <span style="color:var(--warn)">${st.left} left</span>` : ''}${st.owed ? ` · ${st.owed} makeup owed` : ''}` : '<span style="color:var(--bad)">No open package</span>';
       const seg = p ? segButtons(p.id, d, e?.s, ['present', 'absent', 'noshow', 'cancelled']) : (isAdmin() ? `<button class="btn sm" data-new-pkg="${esc(s.studentId)}|${esc(t)}">Add package</button>` : '<span></span>');
-      return `<div class="lesson"><span class="time">${fmtTs(s.start)}–${fmtTs(end)}</span><div class="who"><b><a style="color:inherit;cursor:pointer" ${p ? `data-open-pkg="${esc(p.id)}"` : `data-open-stu="${esc(s.studentId)}"`}>${esc(sname(s.studentId))}</a></b>${s.status === 'tentative' ? ' <span class="pill warn">not confirmed</span>' : ''}<span class="small muted">${info}${e?.n ? ` · ${esc(e.n)}` : ''}</span></div>${seg}</div>`;
+      return `<div class="lesson"><span class="time">${fmtTs(s.start)}–${fmtTs(end)}</span><div class="who"><b class="namecell">${avatar('student', s.studentId, 26)}<a style="color:inherit;cursor:pointer" ${p ? `data-open-pkg="${esc(p.id)}"` : `data-open-stu="${esc(s.studentId)}"`}>${esc(sname(s.studentId))}</a></b>${s.status === 'tentative' ? ' <span class="pill warn">not confirmed</span>' : ''}<span class="small muted">${info}${e?.n ? ` · ${esc(e.n)}` : ''}</span></div>${seg}</div>`;
     }).join('');
-    rows += extras.map(p => { const e = entryFor(p, d); const st = stats(p); return `<div class="lesson"><span class="time">extra</span><div class="who"><b><a style="color:inherit;cursor:pointer" data-open-pkg="${esc(p.id)}">${esc(sname(p.studentId))}</a></b><span class="small muted">${st.used} of ${st.total} used${e.n ? ` · ${esc(e.n)}` : ''}</span></div>${segButtons(p.id, d, e.s, ['makeup', 'present', 'absent', 'noshow', 'cancelled'])}</div>`; }).join('');
-    body += `<section class="tgroup"><h3><span class="dot" style="background:${esc(tcolor(t))}"></span>${esc(tname(t))}</h3><div class="card">${rows}</div></section>`;
+    rows += extras.map(p => { const e = entryFor(p, d); const st = stats(p); return `<div class="lesson"><span class="time">extra</span><div class="who"><b class="namecell">${avatar('student', p.studentId, 26)}<a style="color:inherit;cursor:pointer" data-open-pkg="${esc(p.id)}">${esc(sname(p.studentId))}</a></b><span class="small muted">${st.used} of ${st.total} used${e.n ? ` · ${esc(e.n)}` : ''}</span></div>${segButtons(p.id, d, e.s, ['makeup', 'present', 'absent', 'noshow', 'cancelled'])}</div>`; }).join('');
+    body += `<section class="tgroup"><h3>${avatar('teacher', t, 30)}${esc(tname(t))}</h3><div class="card">${rows}</div></section>`;
   }
   if (!any) body = `<div class="card empty">No lessons on the timetable for ${DAYS[w]}s.<br><span class="small">Use “Log makeup or extra” to record a lesson on this day.</span></div>`;
   const items = attention();
@@ -359,7 +414,7 @@ function renderWeek() {
   const weekConf = days.reduce((a, d) => a + unionMin(conf.filter(x => x.day === d)), 0);
   const weekAll = days.reduce((a, d) => a + unionMin(teach.filter(x => x.day === d)), 0);
   $('#view').innerHTML = `
-  <div class="bar"><h2>Timetable</h2><div class="tchips">${tids.map(id => `<button class="tchip" aria-pressed="${id === t}" data-wt="${esc(id)}"><span class="dot" style="background:${esc(tcolor(id))}"></span>${esc(tname(id))}</button>`).join('')}</div></div>
+  <div class="bar"><h2>Timetable</h2><div class="tchips">${tids.map(id => `<button class="tchip" aria-pressed="${id === t}" data-wt="${esc(id)}">${avatar('teacher', id, 24)}${esc(tname(id))}</button>`).join('')}</div></div>
   <p class="muted small" style="margin:-6px 0 12px"><b style="color:var(--ink)">${hrs(weekConf)}</b> teaching a week · ${conf.length} weekly lessons${weekAll > weekConf ? ` · <span style="color:var(--warn)">+ ${hrs(weekAll - weekConf)} not confirmed</span>` : ''}.${editable ? ' Click an empty time to add a lesson; click a lesson to change or remove it.' : ''}</p>
   <div class="wk-wrap"><div class="wk" style="grid-template-columns:62px repeat(${days.length},minmax(104px,1fr));grid-template-rows:auto repeat(${rows},var(--row))">${g}</div></div>
   <div class="legend"><span><i class="sw" style="background:${esc(tcolor(t))}"></i>Confirmed</span><span><i class="sw" style="background:repeating-linear-gradient(135deg,var(--warn-soft) 0 4px,var(--surface) 4px 7px);outline:1px dashed var(--warn)"></i>Not confirmed</span><span><i class="sw" style="background:var(--brk-bg);border-left:3px solid var(--gold)"></i>Break or unavailable</span><span><i class="sw" style="outline:2px solid var(--bad)"></i>Clash</span></div>
@@ -382,7 +437,7 @@ function renderPackages() {
     f.state === 'all' || (f.state === 'active' && !p.closed) || (f.state === 'closed' && p.closed) || (f.state === 'attention' && !p.closed && (s.state !== 'active' || s.owed || p.payment !== 'paid' || s.ended)) || (f.state === 'ended' && s.ended) ||
     (f.state === 'owed' && s.owed > 0) || (f.state === 'unpaid' && p.payment !== 'paid' && !p.closed) || (f.state === 'low' && !p.closed && (s.state === 'low' || s.state === 'finished'))));
   list.sort((a, b) => tname(a.p.teacherId).localeCompare(tname(b.p.teacherId)) || sname(a.p.studentId).localeCompare(sname(b.p.studentId)));
-  const rows = list.map(({ p, s }) => `<tr data-open-pkg="${esc(p.id)}"><td><b>${esc(sname(p.studentId))}</b><div class="small muted">${esc(KINDS[p.kind] || p.kind)} · ${p.perWeek || 1}× a week${p.subject ? ' · ' + esc(p.subject) : ''}${p.end ? ` · <span style="${s.ended ? 'color:var(--bad)' : ''}">${s.ended ? 'ended' : 'ends'} ${esc(chipD(p.end))}</span>` : ''}</div></td>
+  const rows = list.map(({ p, s }) => `<tr data-open-pkg="${esc(p.id)}"><td><div class="namecell">${avatar('student', p.studentId, 30)}<div><b>${esc(sname(p.studentId))}</b><div class="small muted">${esc(KINDS[p.kind] || p.kind)} · ${p.perWeek || 1}× a week${p.subject ? ' · ' + esc(p.subject) : ''}${p.end ? ` · <span style="${s.ended ? 'color:var(--bad)' : ''}">${s.ended ? 'ended' : 'ends'} ${esc(chipD(p.end))}</span>` : ''}</div></div></div></td>
    <td><span class="dot" style="background:${esc(tcolor(p.teacherId))}"></span> ${esc(tname(p.teacherId))}</td><td>${meter(s)}</td>
    <td class="num">${s.left < 0 ? `<span style="color:var(--bad)">${s.left}</span>` : s.left}</td>
    <td>${s.owed ? `<span class="pill vio">${s.owed} owed</span>` : '<span class="muted">–</span>'}</td>
@@ -415,7 +470,7 @@ function renderStudents() {
   });
   const rows = ids.map(id => {
     const s = S.students[id]; const sl = studentSlots(id); const tset = [...new Set([...pkgList().filter(p => p.studentId === id && !p.closed).map(p => p.teacherId), ...sl.map(x => x.teacherId)])];
-    return `<tr data-open-stu="${esc(id)}"><td><b>${esc(s.name)}</b>${s.notes ? `<div class="small muted" style="max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(s.notes)}</div>` : ''}</td><td>${esc(s.guardian || '–')}</td><td class="mono small">${phoneLinks(s.phone)}</td>
+    return `<tr data-open-stu="${esc(id)}"><td><div class="namecell">${avatar('student', id, 30)}<div><b>${esc(s.name)}</b>${s.notes ? `<div class="small muted" style="max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(s.notes)}</div>` : ''}</div></div></td><td>${esc(s.guardian || '–')}</td><td class="mono small">${phoneLinks(s.phone)}</td>
     <td><span class="pill ${FORM[s.regForm]?.[1]}">${esc(FORM[s.regForm]?.[0] || '')}</span></td>
     <td>${tset.map(t => `<span class="pill"><span class="dot" style="background:${esc(tcolor(t))}"></span>${esc(tname(t))}</span>`).join(' ') || '<span class="muted">–</span>'}</td>
     <td class="small">${sl.map(x => `${DS[x.day]} ${fmtTs(x.start)}`).join(', ') || '<span class="muted">–</span>'}</td></tr>`;
@@ -454,7 +509,7 @@ function renderSetup() {
   <div class="bar"><h2 style="font-size:20px">Teachers</h2><button class="btn" id="addT">Add teacher</button></div>
   <div class="teachers-list">${teacherIds().map(id => {
     const t = S.teachers[id]; const n = slotsOf(id).filter(s => s.studentId).length; const np = pkgList().filter(p => p.teacherId === id && !p.closed).length;
-    return `<div class="card" data-tcard="${esc(id)}"><div style="display:flex;gap:10px;align-items:center"><input type="color" value="${esc(t.color || '#447799')}" data-tf="color" aria-label="Colour" style="width:34px;height:30px;border:0;padding:0;background:none"><input type="text" value="${esc(t.name)}" data-tf="name" aria-label="Name" style="flex:1;font-weight:600"></div>
+    return `<div class="card" data-tcard="${esc(id)}">${photoBlock('teacher', id)}<div style="display:flex;gap:10px;align-items:center"><input type="color" value="${esc(t.color || '#447799')}" data-tf="color" aria-label="Colour" style="width:34px;height:30px;border:0;padding:0;background:none"><input type="text" value="${esc(t.name)}" data-tf="name" aria-label="Name" style="flex:1;font-weight:600"></div>
     <label class="f">Instruments or subjects<input type="text" value="${esc(t.subjects || '')}" data-tf="subjects" placeholder="Piano, Vocal"></label>
     <label class="f">Notes and requests<textarea data-tf="notes">${esc(t.notes || '')}</textarea></label>
     <div class="row-end"><span class="small muted" style="margin-right:auto">${n} weekly lessons · ${np} open packages</span><button class="btn sm primary" data-save-t="${esc(id)}">Save</button></div></div>`;
@@ -755,6 +810,7 @@ function drawPackage(id) {
   const opts = (o, cur) => Object.entries(o).map(([k, v]) => `<option value="${k}" ${cur === k ? 'selected' : ''}>${esc(Array.isArray(v) ? v[0] : (v.label || v))}</option>`).join('');
   const log = (p.log || []).map(e => isPast(e.d) ? `<div class="logrow past"><span class="small">🔒 ${esc(fmtD(e.d))}</span><span class="chip ${esc(e.s)}" style="justify-self:start">${esc(ST[e.s]?.label || e.s)}</span><span class="lnote small muted">${esc(e.n || '')}</span>${A ? `<button class="btn ghost sm" data-correct="${esc(e.id)}" title="Correct this past mark (reason required)" aria-label="Correct">✎</button>` : '<span></span>'}</div>` : `<div class="logrow"><input type="date" value="${esc(e.d)}" data-lg="${esc(e.id)}|lesson_date" aria-label="Date"><select data-lg="${esc(e.id)}|status" aria-label="Status">${opts(ST, e.s)}</select><input class="lnote" type="text" value="${esc(e.n || '')}" placeholder="Note" data-lg="${esc(e.id)}|note" aria-label="Note"><button class="btn ghost sm" data-lgdel="${esc(e.id)}" aria-label="Remove">✕</button></div>`).join('');
   shell(sname(p.studentId), `${esc(tname(p.teacherId))} · ${esc(KINDS[p.kind] || '')} package${p.term ? ' · ' + esc(p.term) : ''}`, `
+   <div class="namecell" style="gap:10px">${avatar('student', p.studentId, 44)}${avatar('teacher', p.teacherId, 32)}</div>
    ${p.closed ? '<div class="infobox">This package is closed. It is kept for history.</div>' : s.used > s.total ? `<div class="badbox">${s.used - s.total} lesson(s) used beyond the package. Renew and move the extra lessons, or adjust the size.</div>` : s.state === 'finished' ? '<div class="badbox">All lessons used. Renew to keep marking attendance.</div>' : ''}
    ${s.ended ? `<div class="warnbox">This package's end date (${esc(fmtD(p.end))}) has passed${s.left > 0 ? ` with ${s.left} lessons not used` : ''}. Renew or close it.</div>` : ''}
    <div class="stats"><div class="stat"><b>${s.used}</b><span>used of ${s.total}</span></div><div class="stat"><b style="color:${s.left <= 0 ? 'var(--bad)' : s.state === 'low' ? 'var(--warn)' : 'inherit'}">${s.left}</b><span>left</span></div><div class="stat"><b>${s.owed}</b><span>makeups owed</span></div><div class="stat"><b>${s.c.absent + s.c.cancelled}</b><span>missed</span></div></div>
@@ -801,6 +857,7 @@ function drawStudent(id) {
   const pk = pkgList().filter(p => p.studentId === id).sort((a, b) => (a.closed - b.closed) || (b.start || '').localeCompare(a.start || ''));
   const sl = studentSlots(id);
   shell(s.name, s.archived ? 'Archived' : '', `
+   ${photoBlock('student', id)}
    <div class="grid2">
     <label class="f">Name<input type="text" id="sN" value="${esc(s.name)}" ${dis}></label>
     <label class="f">Parent / Guardian<input type="text" id="sG" value="${esc(s.guardian || '')}" ${dis}></label>

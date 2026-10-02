@@ -241,3 +241,9 @@ th{letter-spacing:.14em}
 .pbtn.wa{color:#1f8f4e;border-color:#bfe3cc}
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .pbtn.wa{color:#5fd18f;border-color:#2c5a3e}}
 :root[data-theme="dark"] .pbtn.wa{color:#5fd18f;border-color:#2c5a3e}
+/* photos */
+.ava{display:inline-flex;align-items:center;justify-content:center;border-radius:50%;object-fit:cover;flex:none;font-weight:600;letter-spacing:.02em;border:2px solid var(--surface);box-shadow:0 0 0 1px var(--line);vertical-align:middle}
+.namecell{display:flex;align-items:center;gap:9px;min-width:0}
+.tgroup h3 .ava{margin-right:2px}
+.tchip .ava{margin-left:-4px}
+.photoblock{display:flex;align-items:center;gap:14px}
