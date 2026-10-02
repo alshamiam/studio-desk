@@ -336,20 +336,28 @@ function renderWeek() {
     const flag = s.studentId && !pk ? 'no package' : st && st.state === 'finished' ? 'finished' : st && st.state === 'low' ? `${st.left} left` : '';
     g += `<button class="${cls}" style="grid-column:${i + 2};grid-row:${Math.floor(r0)} / span ${span};background:${esc(tcolor(t))};color:#fff" data-edit-slot="${esc(s.id)}" title="${esc(slotLabel(s) + ' ' + fmtT(s.start) + (s.note ? ' — ' + s.note : ''))}">${span === 1 ? `<span class="one"><b>${s.status === 'blocked' && /break/i.test(s.label || '') ? '☕ ' : ''}${esc(slotLabel(s))}</b> <span class="bt">${fmtTs(s.start)}–${fmtTs(toMin(s.start) + s.dur)}</span></span>` : `<span class="bt">${fmtTs(s.start)}–${fmtTs(toMin(s.start) + s.dur)}</span><b>${esc(slotLabel(s))}</b>${span > 2 && flag ? `<span class="bt">${esc(flag)}</span>` : ''}`}</button>`;
   }
-  const gaps = days.filter(d => d !== 5).map(d => {
-    const ds = slots.filter(s => s.day === d).sort((a, b) => toMin(a.start) - toMin(b.start));
-    if (!ds.length) return `<div class="card"><b>${DAYS[d]}</b><span class="small muted">No lessons</span></div>`;
-    const out = []; let cur = toMin(ds[0].start); for (const s of ds) { const st = toMin(s.start); if (st - cur >= 45) out.push([cur, st]); cur = Math.max(cur, st + s.dur); }
-    return `<div class="card"><b>${DAYS[d]}</b><span class="small muted">${fmtT(toMin(ds[0].start))} – ${fmtT(cur)}</span><div class="small">${out.length ? out.map(([a, b]) => `Open ${fmtTs(a)}–${fmtT(b)}`).join('<br>') : 'No gaps of 45 min'}</div></div>`;
+  // Teaching time = every slot that is not a break/unavailable (lessons, group classes, reserved slots).
+  // Overlapping slots are merged so clashes are not counted twice. Unconfirmed slots are reported separately.
+  const unionMin = list => { const iv = list.map(x => [toMin(x.start), toMin(x.start) + x.dur]).sort((a, b) => a[0] - b[0]); let tot = 0, cs = -1, ce = -1; for (const [a, b] of iv) { if (a > ce) { if (ce > cs) tot += ce - cs; cs = a; ce = b; } else ce = Math.max(ce, b); } if (ce > cs) tot += ce - cs; return tot; };
+  const teach = slots.filter(x => x.status !== 'blocked');
+  const conf = teach.filter(x => x.status === 'confirmed'), tent = teach.filter(x => x.status === 'tentative');
+  const hrs = m => { const h = Math.floor(m / 60), mm = m % 60; return h && mm ? `${h} h ${mm} min` : h ? `${h} h` : `${mm} min`; };
+  const dayCards = days.filter(d => d !== 5 || teach.some(x => x.day === 5)).map(d => {
+    const dc = conf.filter(x => x.day === d), dt = tent.filter(x => x.day === d);
+    if (!dc.length && !dt.length) return `<div class="card"><b>${DAYS[d]}</b><span class="small muted">No teaching</span></div>`;
+    const all = dc.concat(dt); const first = Math.min(...all.map(x => toMin(x.start))), last = Math.max(...all.map(x => toMin(x.start) + x.dur));
+    const tm = unionMin(dc), tt = unionMin(dc.concat(dt)) - tm;
+    return `<div class="card"><b>${DAYS[d]}</b><div class="num" style="font-size:18px">${dc.length ? hrs(tm) : '0 h'}</div><span class="small muted">${dc.length} lesson${dc.length === 1 ? '' : 's'} · ${fmtTs(first)}–${fmtT(last)}</span>${tt ? `<div class="small" style="color:var(--warn)">+ ${hrs(tt)} not confirmed</div>` : ''}</div>`;
   }).join('');
-  const weekly = slots.filter(s => s.studentId && s.status !== 'blocked').reduce((a, s) => a + s.dur, 0);
+  const weekConf = days.reduce((a, d) => a + unionMin(conf.filter(x => x.day === d)), 0);
+  const weekAll = days.reduce((a, d) => a + unionMin(teach.filter(x => x.day === d)), 0);
   $('#view').innerHTML = `
   <div class="bar"><h2>Timetable</h2><div class="tchips">${tids.map(id => `<button class="tchip" aria-pressed="${id === t}" data-wt="${esc(id)}"><span class="dot" style="background:${esc(tcolor(id))}"></span>${esc(tname(id))}</button>`).join('')}</div></div>
-  <p class="muted small" style="margin:-6px 0 12px">${slots.filter(s => s.studentId).length} weekly lessons · ${Math.round(weekly / 60 * 10) / 10} teaching hours a week.${editable ? ' Click an empty time to add a lesson; click a lesson to change or remove it.' : ''}</p>
+  <p class="muted small" style="margin:-6px 0 12px"><b style="color:var(--ink)">${hrs(weekConf)}</b> teaching a week · ${conf.length} weekly lessons${weekAll > weekConf ? ` · <span style="color:var(--warn)">+ ${hrs(weekAll - weekConf)} not confirmed</span>` : ''}.${editable ? ' Click an empty time to add a lesson; click a lesson to change or remove it.' : ''}</p>
   <div class="wk-wrap"><div class="wk" style="grid-template-columns:62px repeat(${days.length},minmax(104px,1fr));grid-template-rows:auto repeat(${rows},var(--row))">${g}</div></div>
   <div class="legend"><span><i class="sw" style="background:${esc(tcolor(t))}"></i>Confirmed</span><span><i class="sw" style="background:repeating-linear-gradient(135deg,var(--warn-soft) 0 4px,var(--surface) 4px 7px);outline:1px dashed var(--warn)"></i>Not confirmed</span><span><i class="sw" style="background:var(--brk-bg);border-left:3px solid var(--gold)"></i>Break or unavailable</span><span><i class="sw" style="outline:2px solid var(--bad)"></i>Clash</span></div>
   ${S.teachers[t]?.notes ? `<div class="card" style="padding:12px 14px;margin-top:16px"><div class="eyebrow">Notes and requests</div><div class="small" style="white-space:pre-wrap;margin-top:4px">${esc(S.teachers[t].notes)}</div></div>` : ''}
-  <h3 style="margin-top:22px;font-size:16px">Open times</h3><div class="gaps">${gaps}</div>`;
+  <h3 style="margin-top:22px;font-size:16px">Teaching hours</h3><p class="small muted" style="margin:2px 0 8px">Lessons, group classes and reserved slots. Breaks and unavailable times are not counted.</p><div class="gaps">${dayCards}<div class="card" style="border-color:var(--gold)"><b>Week</b><div class="num" style="font-size:18px">${hrs(weekConf)}</div><span class="small muted">${conf.length} lessons</span>${weekAll > weekConf ? `<div class="small" style="color:var(--warn)">+ ${hrs(weekAll - weekConf)} not confirmed</div>` : ''}</div></div>`;
   document.querySelectorAll('[data-wt]').forEach(b => b.onclick = () => { S.weekTeacher = b.dataset.wt; render(); });
 }
 
