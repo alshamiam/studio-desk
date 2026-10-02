@@ -176,3 +176,15 @@ tbody tr:hover{background:var(--sunk)}
 .who-me{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
 .people td select{font-size:13.5px;padding:5px 7px}
 .people tbody tr{cursor:default}
+/* history */
+.hist{padding:4px 16px}
+.hday{font-size:14px;margin:14px 0 4px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-family:var(--f-body)}
+.hrow{display:grid;grid-template-columns:110px minmax(0,1fr);gap:12px;padding:9px 0;border-top:1px solid var(--line);font-size:14px}
+.hday+.hrow{border-top:0}
+.htime{font-size:12px;color:var(--muted);padding-top:3px}
+.hbody{min-width:0;display:flex;flex-direction:column;gap:3px;overflow-wrap:anywhere}
+.diff{margin:2px 0 0;padding-left:16px;font-size:13px}
+.diff li{margin:1px 0}
+.diff .fk{color:var(--muted)}
+.diff s{color:var(--bad);text-decoration-thickness:1px}
+@media (max-width:560px){.hrow{grid-template-columns:1fr;gap:2px}}

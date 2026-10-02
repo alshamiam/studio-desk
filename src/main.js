@@ -10,7 +10,7 @@ const S = {
   settings: { schoolName: 'Studio Desk', term: '', lowThreshold: 2 },
   session: null, me: null, loaded: false, authMode: 'signin', recovery: false,
   tab: 'today', date: null, weekTeacher: null,
-  pkgFilter: { teacher: 'all', state: 'active', q: '' }, stuFilter: { q: '', form: 'all', teacher: 'all' },
+  pkgFilter: { teacher: 'all', state: 'active', q: '' }, hist: { rows: [], actor: 'all', area: 'all', q: '', from: '', to: '', done: false, loading: false }, stuFilter: { q: '', form: 'all', teacher: 'all' },
 };
 let drawer = null;
 let modal = null;
@@ -106,7 +106,7 @@ async function loadAll() {
   render();
 }
 let reloadTimer = null; let channel = null;
-const scheduleReload = () => { clearTimeout(reloadTimer); reloadTimer = setTimeout(loadAll, 350); };
+const scheduleReload = () => { clearTimeout(reloadTimer); reloadTimer = setTimeout(() => { loadAll(); if (S.tab === 'history' && isAdmin()) loadHistory(true); }, 350); };
 function subscribe() {
   if (channel) return;
   channel = sb.channel('studio').on('postgres_changes', { event: '*', schema: 'public' }, scheduleReload).subscribe();
@@ -147,7 +147,7 @@ async function boot() {
   if (!S.session) { S.me = null; S.loaded = false; render(); return; }
   await loadMe();
   if (S.me.role === 'pending') { render(); return; }
-  if (!isAdmin() && S.tab === 'setup') S.tab = 'today';
+  if (!isAdmin() && (S.tab === 'setup' || S.tab === 'history')) S.tab = 'today';
   await loadAll(); subscribe();
 }
 function renderAuth() {
@@ -185,12 +185,13 @@ function renderAuth() {
       }
       const { error } = await sb.auth.signInWithPassword({ email, password: pass });
       if (error) return msg(error.message === 'Invalid login credentials' ? 'Email or password is wrong.' : error.message, true);
+      sb.rpc('log_event', { p_action: 'SIGN_IN', p_detail: { device: navigator.userAgent.slice(0, 160) } }).then(() => {}, () => {});
     } finally { btn.disabled = false; }
   };
 }
 
 /* ---------- rendering root ---------- */
-function setTab(t) { S.tab = t; try { localStorage.setItem('sd-tab', t); } catch (e) { /* ignore */ } render(); window.scrollTo(0, 0); }
+function setTab(t) { S.tab = t; if (t === 'history') S.hist.rows = []; try { localStorage.setItem('sd-tab', t); } catch (e) { /* ignore */ } render(); window.scrollTo(0, 0); }
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('button[data-tab]'); if (b) setTab(b.dataset.tab); });
 function renderChrome() {
   const inApp = !!(S.session && S.me && S.me.role !== 'pending');
@@ -201,7 +202,7 @@ function renderChrome() {
   $('#brandTerm').textContent = inApp ? (S.settings.term || '') : '';
   const w = $('#whoMe'); w.hidden = !S.session;
   if (S.session) w.innerHTML = `<span>${esc(S.session.user.email)}${S.me ? ' · ' + esc(S.me.role === 'admin' ? 'Super admin' : S.me.role === 'teacher' && myTeacher() ? tname(myTeacher()) : ROLES[S.me.role] || '') : ''}</span><button class="btn sm ghost" id="signOut">Sign out</button>`;
-  if (S.session) $('#signOut').onclick = async () => { await sb.auth.signOut(); if (channel) { sb.removeChannel(channel); channel = null; } closeOverlay(); };
+  if (S.session) $('#signOut').onclick = async () => { await sb.rpc('log_event', { p_action: 'SIGN_OUT' }).then(() => {}, () => {}); await sb.auth.signOut(); if (channel) { sb.removeChannel(channel); channel = null; } closeOverlay(); };
 }
 function render() {
   renderChrome();
@@ -212,7 +213,8 @@ function render() {
   if (S.me.role === 'teacher' && !myTeacher()) { v.innerHTML = `<div class="card empty"><h2>Not linked to a teacher yet</h2><p>Ask a super admin to link your account to your teacher name in Setup → People.</p></div>`; return; }
   if (!S.loaded) { v.innerHTML = '<div class="empty">Loading the studio…</div>'; return; }
   if (S.tab === 'setup' && !isAdmin()) S.tab = 'today';
-  ({ today: renderToday, week: renderWeek, packages: renderPackages, students: renderStudents, setup: renderSetup })[S.tab]();
+  if (S.tab === 'history' && !isAdmin()) S.tab = 'today';
+  ({ today: renderToday, week: renderWeek, packages: renderPackages, students: renderStudents, history: renderHistory, setup: renderSetup })[S.tab]();
   renderOverlay(false);
 }
 
@@ -452,6 +454,159 @@ function renderSetup() {
   document.querySelectorAll('[data-pdel]').forEach(b => b.onclick = () => { const uid = b.dataset.pdel; const p = S.profiles.find(x => x.user_id === uid); confirmBox(`Remove access for ${p?.email}? They can sign up again, but will wait for approval.`, () => run(sb.from('profiles').update({ role: 'pending', teacher_id: null }).eq('user_id', uid), 'Access removed'), 'Remove access'); });
 }
 
+
+/* ---------- HISTORY (super admin) ---------- */
+const AREAS = { all: 'Everything', lessons: 'Attendance', packages: 'Packages', students: 'Students', slots: 'Timetable', teachers: 'Teachers', profiles: 'People & access', settings: 'Settings', session: 'Sign-ins & exports' };
+const FIELD = {
+  lesson_date: 'Date', status: 'Status', note: 'Note', package_id: 'Package', sessions: 'Lessons in package', per_week: 'Lessons per week', start_date: 'Start date',
+  term: 'Term', payment: 'Payment', paid_note: 'Payment note', price: 'Price (KWD)', notes: 'Notes', closed: 'Closed', kind: 'Type', subject: 'Subject',
+  teacher_id: 'Teacher', student_id: 'Student', name: 'Name', guardian: 'Guardian', phone: 'Phone', reg_form: 'Registration form', archived: 'Archived',
+  day: 'Day', start_time: 'Start', dur: 'Length (min)', label: 'Label', subjects: 'Subjects', color: 'Colour', sort_order: 'Order', school_name: 'Studio name',
+  low_threshold: 'Warning level', role: 'Access', email: 'Email',
+};
+const HIDDEN_FIELDS = new Set(['id', 'created_at', 'created_by', 'user_id']);
+const pkgMemo = {};
+function rememberPkgs(rows) { for (const r of rows) if (r.table_name === 'packages') { const d = r.new_data || r.old_data; if (d) pkgMemo[d.id] = { studentId: d.student_id, teacherId: d.teacher_id }; } }
+function pkgLabel(pid) { const p = S.packages[pid] || pkgMemo[pid]; return p ? `${sname(p.studentId)} · ${tname(p.teacherId)}` : 'a deleted package'; }
+function fmtVal(table, k, v) {
+  if (v === null || v === undefined || v === '') return '—';
+  if (k === 'status' && table === 'lessons') return ST[v]?.label || v;
+  if (k === 'status' && table === 'slots') return ({ confirmed: 'Confirmed', tentative: 'Not confirmed', blocked: 'Break or unavailable' })[v] || v;
+  if (k === 'payment') return PAY[v]?.[0] || v;
+  if (k === 'reg_form') return FORM[v]?.[0] || v;
+  if (k === 'kind') return KINDS[v] || v;
+  if (k === 'role') return ROLES[v] || v;
+  if (k === 'teacher_id') return tname(v);
+  if (k === 'student_id') return sname(v);
+  if (k === 'package_id') return pkgLabel(v);
+  if (k === 'day') return DAYS[v] || v;
+  if (k === 'start_time') return fmtT(v);
+  if (k === 'lesson_date' || k === 'start_date') return fmtD(v, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+  if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+  return String(v);
+}
+const fmtAt = ts => new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kuwait', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true }).format(new Date(ts));
+const dayKey = ts => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kuwait' }).format(new Date(ts));
+function actorName(r) {
+  const p = S.profiles.find(x => x.user_id === r.actor);
+  const t = p?.teacher_id ? tname(p.teacher_id) : '';
+  return r.actor_email ? (t ? `${t} (${r.actor_email})` : r.actor_email) : 'Unknown';
+}
+function describe(r) {
+  const d = r.new_data || r.old_data || {}; const A = r.action; const T = r.table_name;
+  const verb = A === 'INSERT' ? 'added' : A === 'DELETE' ? 'deleted' : 'changed';
+  switch (T) {
+    case 'lessons': {
+      const who = pkgLabel(d.package_id); const date = fmtD(d.lesson_date);
+      if (A === 'INSERT') return `Marked <b>${esc(who)}</b> on ${esc(date)} as <b>${esc(ST[d.status]?.label || d.status)}</b>`;
+      if (A === 'DELETE') return `Removed the <b>${esc(ST[d.status]?.label || d.status)}</b> mark for <b>${esc(who)}</b> on ${esc(date)}`;
+      return `Changed the lesson for <b>${esc(who)}</b> on ${esc(date)}`;
+    }
+    case 'packages': {
+      const who = `${sname(d.student_id)} · ${tname(d.teacher_id)}`;
+      if (A === 'INSERT') return `Created a ${esc(KINDS[d.kind] || '')} package (${esc(d.sessions)} lessons) for <b>${esc(who)}</b>`;
+      if (A === 'DELETE') return `Deleted the package for <b>${esc(who)}</b>`;
+      if (r.changed.length === 1 && r.changed[0] === 'closed') return `${d.closed ? 'Closed' : 'Reopened'} the package for <b>${esc(who)}</b>`;
+      return `Changed the package for <b>${esc(who)}</b>`;
+    }
+    case 'students': return `${A === 'INSERT' ? 'Added' : A === 'DELETE' ? 'Deleted' : r.changed.length === 1 && r.changed[0] === 'archived' ? (d.archived ? 'Archived' : 'Restored') : 'Changed'} student <b>${esc(d.name)}</b>`;
+    case 'slots': {
+      const what = d.student_id ? sname(d.student_id) : (d.label || 'a slot');
+      const when = `${DAYS[d.day] || ''} ${d.start_time ? fmtT(d.start_time) : ''}`;
+      if (A === 'INSERT') return `Added <b>${esc(what)}</b> to ${esc(tname(d.teacher_id))}'s timetable, ${esc(when)}`;
+      if (A === 'DELETE') return `Removed <b>${esc(what)}</b> from ${esc(tname(d.teacher_id))}'s timetable (${esc(when)})`;
+      return `Changed <b>${esc(what)}</b> on ${esc(tname(d.teacher_id))}'s timetable`;
+    }
+    case 'teachers': return `${verb[0].toUpperCase() + verb.slice(1)} teacher <b>${esc(d.name)}</b>`;
+    case 'settings': return 'Changed studio settings';
+    case 'profiles':
+      if (A === 'INSERT') return `New account signed up: <b>${esc(d.email)}</b> (${esc(ROLES[d.role] || d.role)})`;
+      if (A === 'DELETE') return `Deleted the account <b>${esc(d.email)}</b>`;
+      return `Changed access for <b>${esc(d.email)}</b>`;
+    case 'app_admins': return `${A === 'INSERT' ? 'Added' : 'Removed'} <b>${esc(d.email)}</b> ${A === 'INSERT' ? 'to' : 'from'} the automatic super admin list`;
+    case 'session':
+      if (A === 'SIGN_IN') return 'Signed in';
+      if (A === 'SIGN_OUT') return 'Signed out';
+      if (A === 'EXPORT') return `Exported everything to Excel${d.file ? ` (${esc(d.file)})` : ''}`;
+      return esc(A);
+    default: return `${esc(A)} on ${esc(T)}`;
+  }
+}
+function diffHtml(r) {
+  const T = r.table_name;
+  if (r.action === 'UPDATE') {
+    const keys = r.changed.filter(k => !HIDDEN_FIELDS.has(k));
+    return keys.length ? `<ul class="diff">${keys.map(k => `<li><span class="fk">${esc(FIELD[k] || k)}</span> <s>${esc(fmtVal(T, k, r.old_data?.[k]))}</s> → <b>${esc(fmtVal(T, k, r.new_data?.[k]))}</b></li>`).join('')}</ul>` : '';
+  }
+  const d = r.action === 'DELETE' ? r.old_data : r.new_data;
+  if (!d || T === 'session') return d && d.device ? `<div class="small muted">${esc(d.device)}</div>` : '';
+  const keys = Object.keys(d).filter(k => !HIDDEN_FIELDS.has(k) && d[k] !== '' && d[k] !== null);
+  return `<details class="small"><summary>${r.action === 'DELETE' ? 'What was deleted' : 'All details'}</summary><ul class="diff">${keys.map(k => `<li><span class="fk">${esc(FIELD[k] || k)}</span> ${esc(fmtVal(T, k, d[k]))}</li>`).join('')}</ul></details>`;
+}
+function histRows(rows, withDays) {
+  let last = ''; let h = '';
+  for (const r of rows) {
+    const dk = dayKey(r.at);
+    if (withDays && dk !== last) { h += `<h3 class="hday">${esc(fmtD(dk, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }))}</h3>`; last = dk; }
+    const tone = r.action === 'DELETE' ? 'bad' : r.action === 'INSERT' ? 'ok' : r.table_name === 'session' ? '' : 'blue';
+    h += `<div class="hrow"><div class="htime mono">${esc(withDays ? fmtAt(r.at) : fmtD(dk) + ' ' + fmtAt(r.at))}</div><div class="hbody"><div><span class="pill ${tone}">${esc(AREAS[r.table_name] || r.table_name)}</span> ${describe(r)}</div><div class="small muted">by ${esc(actorName(r))}</div>${diffHtml(r)}</div></div>`;
+  }
+  return h;
+}
+async function loadHistory(reset) {
+  const H = S.hist; if (H.loading) return; H.loading = true;
+  let q = sb.from('audit_log').select('*').order('id', { ascending: false }).limit(200);
+  if (H.actor !== 'all') q = H.actor === 'system' ? q.is('actor', null) : q.eq('actor', H.actor);
+  if (H.area !== 'all') q = q.eq('table_name', H.area);
+  if (H.from) q = q.gte('at', new Date(H.from + 'T00:00:00+03:00').toISOString());
+  if (H.to) q = q.lt('at', new Date(addDays(H.to, 1) + 'T00:00:00+03:00').toISOString());
+  if (!reset && H.rows.length) q = q.lt('id', H.rows.at(-1).id);
+  const { data, error } = await q; H.loading = false;
+  if (error) { console.error(error); toast('Could not load the history.'); return; }
+  rememberPkgs(data);
+  H.rows = reset ? data : H.rows.concat(data); H.done = data.length < 200;
+  if (S.tab === 'history') renderHistory();
+}
+function renderHistory() {
+  const H = S.hist;
+  if (!H.rows.length && !H.done && !H.loading) { loadHistory(true); }
+  const q = H.q.trim().toLowerCase();
+  const rows = q ? H.rows.filter(r => (describe(r) + ' ' + diffHtml(r) + ' ' + actorName(r)).replace(/<[^>]+>/g, ' ').toLowerCase().includes(q)) : H.rows;
+  $('#view').innerHTML = `
+  <div class="bar"><h2>History</h2></div>
+  <p class="muted small" style="margin:-6px 0 12px">Every change anyone makes is recorded here automatically by the database: who, when, and exactly what changed. Nobody can edit or delete this history.</p>
+  <div class="filters" style="margin-bottom:14px">
+   <select id="hA" aria-label="Person"><option value="all">Everyone</option>${S.profiles.map(p => `<option value="${esc(p.user_id)}" ${H.actor === p.user_id ? 'selected' : ''}>${esc(p.email)}</option>`).join('')}<option value="system" ${H.actor === 'system' ? 'selected' : ''}>System (database)</option></select>
+   <select id="hT" aria-label="Area">${Object.entries(AREAS).map(([k, v]) => `<option value="${k}" ${H.area === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+   <label class="small muted">From <input type="date" id="hF" value="${esc(H.from)}"></label>
+   <label class="small muted">To <input type="date" id="hTo" value="${esc(H.to)}"></label>
+   <input type="search" id="hQ" placeholder="Search names, notes, values" value="${esc(H.q)}" aria-label="Search history">
+  </div>
+  <div class="card hist">${rows.length ? histRows(rows, true) : `<div class="empty">${H.loading || (!H.done && !H.rows.length) ? 'Loading…' : 'No changes match these filters.'}</div>`}</div>
+  ${H.done || !H.rows.length ? '' : '<div style="text-align:center;margin-top:14px"><button class="btn" id="hMore">Load older changes</button></div>'}`;
+  const refetch = () => { H.rows = []; H.done = false; loadHistory(true); renderHistory(); };
+  $('#hA').onchange = e => { H.actor = e.target.value; refetch(); };
+  $('#hT').onchange = e => { H.area = e.target.value; refetch(); };
+  $('#hF').onchange = e => { H.from = e.target.value; refetch(); };
+  $('#hTo').onchange = e => { H.to = e.target.value; refetch(); };
+  $('#hQ').oninput = e => { H.q = e.target.value; const pos = e.target.selectionStart; renderHistory(); const el = $('#hQ'); el.focus(); el.setSelectionRange(pos, pos); };
+  if ($('#hMore')) $('#hMore').onclick = () => loadHistory(false);
+}
+async function showRecordHistory(kind, id) {
+  const box = $('#recHist'); if (!box) return; box.innerHTML = '<div class="small muted">Loading…</div>';
+  const v = `"${id.replace(/"/g, '')}"`;
+  const filter = kind === 'package'
+    ? `and(table_name.eq.packages,record_id.eq.${v}),new_data->>package_id.eq.${v},old_data->>package_id.eq.${v}`
+    : `and(table_name.eq.students,record_id.eq.${v}),new_data->>student_id.eq.${v},old_data->>student_id.eq.${v}` + (() => {
+      const pids = pkgList().filter(p => p.studentId === id).map(p => `"${p.id.replace(/"/g, '')}"`);
+      return pids.length ? `,new_data->>package_id.in.(${pids.join(',')}),old_data->>package_id.in.(${pids.join(',')})` : '';
+    })();
+  const { data, error } = await sb.from('audit_log').select('*').or(filter).order('id', { ascending: false }).limit(500);
+  if (error) { console.error(error); box.innerHTML = '<div class="badbox">Could not load the history.</div>'; return; }
+  rememberPkgs(data);
+  box.innerHTML = data.length ? `<div class="card hist" style="padding:4px 12px">${histRows(data, false)}</div>` : '<p class="small muted" style="margin:0">No changes recorded yet. Changes made from now on will show here.</p>';
+}
+
 /* ---------- overlay: drawers & modals ---------- */
 function openDrawer(type, id) { drawer = { type, id }; renderOverlay(true); }
 function closeOverlay() { drawer = null; modal = null; $('#overlay').innerHTML = ''; }
@@ -499,7 +654,8 @@ function drawPackage(id) {
    </div><label class="f">Notes<textarea id="pNo" ${dis}>${esc(p.notes || '')}</textarea></label>
    ${A ? `<div class="row-end"><button class="btn danger sm" id="pDel">Delete package</button>${p.closed ? '<button class="btn sm" id="pReopen">Reopen</button>' : '<button class="btn sm" id="pClose">Close</button><button class="btn sm" id="pRenew">Renew</button>'}<button class="btn primary sm" id="pSave">Save package</button></div>` : '<p class="small muted" style="margin:0">Only a super admin can change package details.</p>'}</div>
    <div class="sect"><h3>Weekly times with ${esc(tname(p.teacherId))}</h3><div class="small">${slotsOf(p.teacherId).filter(x => x.studentId === p.studentId).map(x => `${DAYS[x.day]} ${fmtT(x.start)} (${x.dur} min)${x.status === 'tentative' ? ' · not confirmed' : ''}`).join('<br>') || '<span class="muted">Not on the timetable.</span>'}</div>
-   <div><button class="btn sm" data-open-stu="${esc(p.studentId)}">Open student</button></div></div>`);
+   <div><button class="btn sm" data-open-stu="${esc(p.studentId)}">Open student</button></div></div>
+   ${A ? `<div class="sect"><h3>Change history</h3><div id="recHist"><button class="btn sm" data-rec-hist="package|${esc(id)}">Show every change to this package</button></div></div>` : ''}`);
   const ov = $('#overlay');
   ov.querySelectorAll('[data-lg]').forEach(el => el.onchange = () => { const [lid, col] = el.dataset.lg.split('|'); if (col === 'lesson_date' && !el.value) return; run(sb.from('lessons').update({ [col]: el.value }).eq('id', lid)).then(() => renderOverlay(true)).catch(() => {}); });
   ov.querySelectorAll('[data-lgdel]').forEach(b => b.onclick = () => run(sb.from('lessons').delete().eq('id', b.dataset.lgdel)).then(() => renderOverlay(true)).catch(() => {}));
@@ -526,7 +682,8 @@ function drawStudent(id) {
    ${A ? `<div class="row-end"><button class="btn sm danger" id="sDel">Delete</button><button class="btn sm" id="sArch">${s.archived ? 'Restore' : 'Archive'}</button><button class="btn sm primary" id="sSave">Save student</button></div>` : ''}
    <div class="sect"><h3>Packages</h3>${pk.map(p => { const st = stats(p); return `<div class="card" style="padding:10px 12px;cursor:pointer" data-open-pkg="${esc(p.id)}"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="dot" style="background:${esc(tcolor(p.teacherId))}"></span><b>${esc(tname(p.teacherId))}</b><span class="muted small">${esc(KINDS[p.kind] || '')} · ${esc(p.term || '')}</span><span style="margin-left:auto" class="pill ${p.closed ? '' : st.state === 'finished' ? 'bad' : st.state === 'low' ? 'warn' : 'ok'}">${p.closed ? 'Closed' : st.left + ' left'}</span></div>${meter(st)}${chips(p)}</div>`; }).join('') || '<p class="muted small">No packages yet.</p>'}
     ${A ? '<div><button class="btn sm" id="sNewPkg">New package</button></div>' : ''}</div>
-   <div class="sect"><h3>Weekly timetable</h3><div class="small">${sl.map(x => `<span class="dot" style="background:${esc(tcolor(x.teacherId))}"></span> ${DAYS[x.day]} ${fmtT(x.start)} · ${esc(tname(x.teacherId))}${x.status === 'tentative' ? ' · not confirmed' : ''}`).join('<br>') || '<span class="muted">Not on the timetable.</span>'}</div></div>`);
+   <div class="sect"><h3>Weekly timetable</h3><div class="small">${sl.map(x => `<span class="dot" style="background:${esc(tcolor(x.teacherId))}"></span> ${DAYS[x.day]} ${fmtT(x.start)} · ${esc(tname(x.teacherId))}${x.status === 'tentative' ? ' · not confirmed' : ''}`).join('<br>') || '<span class="muted">Not on the timetable.</span>'}</div></div>
+   ${A ? `<div class="sect"><h3>Change history</h3><div id="recHist"><button class="btn sm" data-rec-hist="student|${esc(id)}">Show every change for this student</button></div></div>` : ''}`);
   if (!A) return;
   $('#sSave').onclick = () => { const patch = { name: $('#sN').value.trim(), guardian: $('#sG').value.trim(), phone: $('#sP').value.trim(), regForm: $('#sF').value, notes: $('#sNo').value }; if (!patch.name) return toast('A student needs a name'); run(sb.from('students').update(toRow(patch, stuCols)).eq('id', id), 'Student saved').then(() => renderOverlay(true)).catch(() => {}); };
   $('#sArch').onclick = () => run(sb.from('students').update({ archived: !s.archived }).eq('id', id), s.archived ? 'Restored' : 'Archived').catch(() => {});
@@ -644,8 +801,9 @@ function drawModal() {
 
 /* ---------- global click delegation ---------- */
 document.addEventListener('click', async e => {
-  const t = e.target.closest('[data-open-pkg],[data-open-stu],[data-mark],[data-new-pkg],[data-goto-date],[data-add-slot],[data-edit-slot],[data-close]'); if (!t) return;
+  const t = e.target.closest('[data-rec-hist],[data-open-pkg],[data-open-stu],[data-mark],[data-new-pkg],[data-goto-date],[data-add-slot],[data-edit-slot],[data-close]'); if (!t) return;
   if (t.hasAttribute('data-close')) return closeOverlay();
+  if (t.dataset.recHist) { const [kind, id] = t.dataset.recHist.split('|'); return showRecordHistory(kind, id); }
   if (t.dataset.openPkg) { e.preventDefault(); return openDrawer('package', t.dataset.openPkg); }
   if (t.dataset.openStu) { e.preventDefault(); return openDrawer('student', t.dataset.openStu); }
   if (t.dataset.newPkg) { const [sid, tid] = t.dataset.newPkg.split('|'); return openModal('newpkg', { studentId: sid, teacherId: tid }); }
@@ -678,8 +836,9 @@ async function exportXlsx() {
   for (const id of studentIds(true)) { const s = S.students[id]; st.push([s.name, s.guardian || '', s.phone || '', FORM[s.regForm]?.[0] || '', s.notes || '', s.archived ? 'Yes' : '']); }
   X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(st), 'Students');
   X.writeFile(wb, `studio-${kwToday()}.xlsx`);
+  sb.rpc('log_event', { p_action: 'EXPORT', p_detail: { file: `studio-${kwToday()}.xlsx`, packages: pkgList().length } }).then(() => {}, () => {});
 }
 
 /* ---------- start ---------- */
-try { const t = localStorage.getItem('sd-tab'); if (t && ['today', 'week', 'packages', 'students', 'setup'].includes(t)) S.tab = t; } catch (e) { /* ignore */ }
+try { const t = localStorage.getItem('sd-tab'); if (t && ['today', 'week', 'packages', 'students', 'history', 'setup'].includes(t)) S.tab = t; } catch (e) { /* ignore */ }
 render();

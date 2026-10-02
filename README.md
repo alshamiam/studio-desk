@@ -14,6 +14,7 @@ Replaces the old "Schedules and attendance" spreadsheet.
 | Timetable | Weekly grid per teacher. Click to add or edit a lesson time. Flags clashes and shows open times |
 | Attendance | Every package: lessons used and left, makeups owed, payment, and the lesson log |
 | Students | Guardian, phone, registration form, packages and weekly times |
+| History (super admin) | Every change anyone makes: who, when, and the exact before → after values. Filter by person, area and date. Packages and students also show their own change history |
 | Setup (super admin) | People and access, studio settings, teachers, Excel export |
 
 ## How lessons count
@@ -47,3 +48,10 @@ Override with `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` if needed.
 
 In the Supabase dashboard → Authentication → URL Configuration, set **Site URL** to the Vercel address
 and add it under **Redirect URLs**, so confirmation and password-reset emails link back to the app.
+
+## Change history
+
+Every insert, update and delete on every table is recorded by database triggers into `public.audit_log`
+(who, when, full before/after row, list of changed fields), plus sign-ins, sign-outs and Excel exports.
+The log is read-only for everyone and readable only by super admins. Changes made directly in the Supabase
+dashboard are recorded too, as "System (database)".
