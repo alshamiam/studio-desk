@@ -212,3 +212,12 @@ th{letter-spacing:.14em}
 .modal{border-top:3px solid var(--gold)}
 .daynav .big{font-family:var(--f-display);font-weight:400;font-size:28px}
 .tbl-wrap td:nth-child(2){white-space:nowrap}
+/* payments */
+.payrow{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--line)}
+.payrow:first-child{border-top:0}
+.payadd{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:6px}
+.payadd input,.payadd select{font-size:13.5px;padding:6px 8px}
+.paygrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:12px}
+.paycols{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+.mrow{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-top:1px solid var(--line);font-size:14px}
+.mrow:first-of-type{border-top:0}

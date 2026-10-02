@@ -6,11 +6,11 @@ const sb = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 /* ---------- state ---------- */
 const S = {
-  teachers: {}, students: {}, packages: {}, profiles: [],
+  teachers: {}, students: {}, packages: {}, profiles: [], payments: [],
   settings: { schoolName: 'Studio Desk', term: '', lowThreshold: 2 },
   session: null, me: null, loaded: false, authMode: 'signin', recovery: false,
   tab: 'today', date: null, weekTeacher: null,
-  pkgFilter: { teacher: 'all', state: 'active', q: '' }, hist: { rows: [], actor: 'all', area: 'all', q: '', from: '', to: '', done: false, loading: false }, stuFilter: { q: '', form: 'all', teacher: 'all' },
+  pkgFilter: { teacher: 'all', state: 'active', q: '' }, payFilter: { q: '', method: 'all', status: 'all' }, hist: { rows: [], actor: 'all', area: 'all', q: '', from: '', to: '', done: false, loading: false }, stuFilter: { q: '', form: 'all', teacher: 'all' },
 };
 let drawer = null;
 let modal = null;
@@ -61,7 +61,9 @@ function stats(p) {
   const th = Number(S.settings.lowThreshold ?? 2);
   let state = 'active'; if (p.closed) state = 'closed'; else if (left <= 0) state = 'finished'; else if (left <= th) state = 'low';
   const last = log.length ? log.map(e => e.d).sort().at(-1) : null;
-  return { used, owed, left, total, c, state, last };
+  const ended = !p.closed && !!p.end && p.end < kwToday();
+  const paidSum = S.payments.filter(x => x.package_id === p.id && x.status === 'paid').reduce((a, x) => a + Number(x.amount), 0);
+  return { used, owed, left, total, c, state, last, ended, paidSum };
 }
 const pkgList = () => Object.entries(S.packages).map(([id, p]) => ({ id, ...p }));
 const pairPkgs = (sid, tid) => pkgList().filter(p => p.studentId === sid && p.teacherId === tid);
@@ -89,19 +91,20 @@ async function loadAll() {
     sb.from('lessons').select('id,package_id,lesson_date,status,note'), sb.from('slots').select('*'),
     sb.from('settings').select('*').maybeSingle(),
     isAdmin() ? sb.from('profiles').select('*').order('created_at') : Promise.resolve({ data: [] }),
+    isAdmin() ? sb.from('payments').select('*').order('created_at', { ascending: false }) : Promise.resolve({ data: [] }),
   ]);
   const bad = q.find(r => r.error); if (bad) { console.error(bad.error); toast('Could not load the studio data. Refresh to try again.'); return; }
-  const [t, s, p, l, sl, st, pr] = q.map(r => r.data);
+  const [t, s, p, l, sl, st, pr, pay] = q.map(r => r.data);
   const teachers = {};
   for (const r of t) teachers[r.id] = { name: r.name, subjects: r.subjects, color: r.color, notes: r.notes, order: r.sort_order, slots: [] };
   for (const r of sl) teachers[r.teacher_id]?.slots.push({ id: r.id, day: r.day, start: r.start_time, dur: r.dur, studentId: r.student_id, label: r.label, status: r.status, note: r.note });
   const students = {};
   for (const r of s) students[r.id] = { name: r.name, guardian: r.guardian, phone: r.phone, regForm: r.reg_form, notes: r.notes, archived: r.archived };
   const packages = {};
-  for (const r of p) packages[r.id] = { studentId: r.student_id, teacherId: r.teacher_id, subject: r.subject, kind: r.kind, sessions: r.sessions, perWeek: r.per_week, start: r.start_date, term: r.term, payment: r.payment, paidNote: r.paid_note, price: r.price, notes: r.notes, closed: r.closed, log: [] };
+  for (const r of p) packages[r.id] = { studentId: r.student_id, teacherId: r.teacher_id, subject: r.subject, kind: r.kind, sessions: r.sessions, perWeek: r.per_week, start: r.start_date, end: r.end_date, term: r.term, payment: r.payment, paidNote: r.paid_note, price: r.price, notes: r.notes, closed: r.closed, log: [] };
   for (const r of l) packages[r.package_id]?.log.push({ id: r.id, d: r.lesson_date, s: r.status, n: r.note });
   for (const k in packages) packages[k].log.sort((a, b) => a.d.localeCompare(b.d));
-  Object.assign(S, { teachers, students, packages, profiles: pr || [], loaded: true });
+  Object.assign(S, { teachers, students, packages, profiles: pr || [], payments: pay || [], loaded: true });
   if (st) S.settings = { schoolName: st.school_name, term: st.term, lowThreshold: st.low_threshold };
   render();
 }
@@ -119,8 +122,8 @@ async function run(promise, okMsg) {
   if (okMsg) toast(okMsg);
   await loadAll();
 }
-const pkgCols = { teacherId: 'teacher_id', studentId: 'student_id', subject: 'subject', kind: 'kind', sessions: 'sessions', perWeek: 'per_week', start: 'start_date', term: 'term', payment: 'payment', paidNote: 'paid_note', price: 'price', notes: 'notes', closed: 'closed' };
-const toRow = (patch, map) => { const o = {}; for (const k in patch) if (map[k]) o[map[k]] = patch[k] === '' && (k === 'start') ? null : patch[k]; return o; };
+const pkgCols = { teacherId: 'teacher_id', studentId: 'student_id', subject: 'subject', kind: 'kind', sessions: 'sessions', perWeek: 'per_week', start: 'start_date', end: 'end_date', term: 'term', payment: 'payment', paidNote: 'paid_note', price: 'price', notes: 'notes', closed: 'closed' };
+const toRow = (patch, map) => { const o = {}; for (const k in patch) if (map[k]) o[map[k]] = patch[k] === '' && (k === 'start' || k === 'end') ? null : patch[k]; return o; };
 const savePkg = (id, patch, msg) => run(sb.from('packages').update(toRow(patch, pkgCols)).eq('id', id), msg);
 async function setLog(pid, date, status, note) {
   const e = entryFor(S.packages[pid], date);
@@ -147,7 +150,7 @@ async function boot() {
   if (!S.session) { S.me = null; S.loaded = false; render(); return; }
   await loadMe();
   if (S.me.role === 'pending') { render(); return; }
-  if (!isAdmin() && (S.tab === 'setup' || S.tab === 'history')) S.tab = 'today';
+  if (!isAdmin() && ['setup', 'history', 'payments'].includes(S.tab)) S.tab = 'today';
   await loadAll(); subscribe();
 }
 function renderAuth() {
@@ -217,7 +220,8 @@ function render() {
   if (!S.loaded) { v.innerHTML = '<div class="empty">Loading the studio…</div>'; return; }
   if (S.tab === 'setup' && !isAdmin()) S.tab = 'today';
   if (S.tab === 'history' && !isAdmin()) S.tab = 'today';
-  ({ today: renderToday, week: renderWeek, packages: renderPackages, students: renderStudents, history: renderHistory, setup: renderSetup })[S.tab]();
+  if (S.tab === 'payments' && !isAdmin()) S.tab = 'today';
+  ({ today: renderToday, week: renderWeek, packages: renderPackages, students: renderStudents, payments: renderPayments, history: renderHistory, setup: renderSetup })[S.tab]();
   renderOverlay(false);
 }
 
@@ -246,12 +250,16 @@ function attention() {
   const noPkg = [], noSlot = [];
   for (const t of teacherIds()) for (const sl of slotsOf(t)) if (sl.studentId && sl.status !== 'blocked' && !pairPkgs(sl.studentId, t).some(p => !p.closed)) noPkg.push([sl, t]);
   for (const p of pk) if (!p.closed && !slotsOf(p.teacherId).some(sl => sl.studentId === p.studentId)) noSlot.push(p);
+  const endedL = [], endingL = []; const soon = addDays(today, 7);
+  for (const p of pk) { if (p.closed || !p.end) continue; const s = stats(p); if (p.end < today) endedL.push([p, s]); else if (p.end <= soon) endingL.push([p, s]); }
   const tent = []; for (const t of teacherIds()) for (const sl of slotsOf(t)) if (sl.status === 'tentative') tent.push([sl, t]);
   const forms = studentIds().filter(id => S.students[id].regForm !== 'signed');
   const add = (n, tone, title, list) => { if (n) items.push({ n, tone, title, list }); };
   add(over.length, 'bad', 'Used more lessons than they paid for', pk2(over, (p, s) => `${s.used} of ${s.total} used`));
   add(fin.length, 'bad', 'Packages finished, renewal due', pk2(fin, (p, s) => `all ${s.total} used`));
   add(low.length, 'warn', 'Packages nearly finished', pk2(low, (p, s) => `${s.left} left`));
+  add(endedL.length, 'bad', 'Package end date has passed', pk2(endedL, (p, s) => `ended ${esc(fmtD(p.end))}${s.left > 0 ? ` with ${s.left} lessons left` : ''}`));
+  add(endingL.length, 'warn', 'Packages ending this week', pk2(endingL, p => `ends ${esc(fmtD(p.end))}`));
   add(unmarked.length, 'warn', 'Lessons not marked (last 2 weeks)', unmarked.slice(0, 40).map(u => `<li><a data-goto-date="${u.d}">${esc(fmtD(u.d))}</a> · ${fmtT(u.start)} · ${esc(sname(u.sid))} · ${esc(tname(u.t))}</li>`).join('') + (unmarked.length > 40 ? `<li>and ${unmarked.length - 40} more</li>` : ''));
   add(owed.length, 'vio', 'Makeup lessons owed', pk2(owed, (p, s) => `${s.owed} owed`));
   add(unpaid.length, 'bad', 'Payment outstanding', pk2(unpaid, p => esc(PAY[p.payment]?.[0] || p.payment)));
@@ -348,10 +356,10 @@ function renderPackages() {
   const f = S.pkgFilter; const q = f.q.trim().toLowerCase();
   let list = pkgList().map(p => ({ p, s: stats(p) }));
   list = list.filter(({ p, s }) => (f.teacher === 'all' || p.teacherId === f.teacher) && (!q || sname(p.studentId).toLowerCase().includes(q)) && (
-    f.state === 'all' || (f.state === 'active' && !p.closed) || (f.state === 'closed' && p.closed) || (f.state === 'attention' && !p.closed && (s.state !== 'active' || s.owed || p.payment !== 'paid')) ||
+    f.state === 'all' || (f.state === 'active' && !p.closed) || (f.state === 'closed' && p.closed) || (f.state === 'attention' && !p.closed && (s.state !== 'active' || s.owed || p.payment !== 'paid' || s.ended)) || (f.state === 'ended' && s.ended) ||
     (f.state === 'owed' && s.owed > 0) || (f.state === 'unpaid' && p.payment !== 'paid' && !p.closed) || (f.state === 'low' && !p.closed && (s.state === 'low' || s.state === 'finished'))));
   list.sort((a, b) => tname(a.p.teacherId).localeCompare(tname(b.p.teacherId)) || sname(a.p.studentId).localeCompare(sname(b.p.studentId)));
-  const rows = list.map(({ p, s }) => `<tr data-open-pkg="${esc(p.id)}"><td><b>${esc(sname(p.studentId))}</b><div class="small muted">${esc(KINDS[p.kind] || p.kind)} · ${p.perWeek || 1}× a week${p.subject ? ' · ' + esc(p.subject) : ''}</div></td>
+  const rows = list.map(({ p, s }) => `<tr data-open-pkg="${esc(p.id)}"><td><b>${esc(sname(p.studentId))}</b><div class="small muted">${esc(KINDS[p.kind] || p.kind)} · ${p.perWeek || 1}× a week${p.subject ? ' · ' + esc(p.subject) : ''}${p.end ? ` · <span style="${s.ended ? 'color:var(--bad)' : ''}">${s.ended ? 'ended' : 'ends'} ${esc(chipD(p.end))}</span>` : ''}</div></td>
    <td><span class="dot" style="background:${esc(tcolor(p.teacherId))}"></span> ${esc(tname(p.teacherId))}</td><td>${meter(s)}</td>
    <td class="num">${s.left < 0 ? `<span style="color:var(--bad)">${s.left}</span>` : s.left}</td>
    <td>${s.owed ? `<span class="pill vio">${s.owed} owed</span>` : '<span class="muted">–</span>'}</td>
@@ -362,7 +370,7 @@ function renderPackages() {
   <div class="filters" style="margin-bottom:12px">
    <input type="search" id="pq" placeholder="Search student" value="${esc(f.q)}" aria-label="Search student">
    <select id="pt" aria-label="Teacher"><option value="all">All teachers</option>${teacherIds().map(id => `<option value="${esc(id)}" ${f.teacher === id ? 'selected' : ''}>${esc(tname(id))}</option>`).join('')}</select>
-   <select id="ps" aria-label="Show">${[['active', 'Open packages'], ['attention', 'Needs attention'], ['low', 'Nearly done or finished'], ['owed', 'Makeup owed'], ['unpaid', 'Payment outstanding'], ['closed', 'Closed'], ['all', 'Everything']].map(([k, l]) => `<option value="${k}" ${f.state === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
+   <select id="ps" aria-label="Show">${[['active', 'Open packages'], ['attention', 'Needs attention'], ['low', 'Nearly done or finished'], ['ended', 'End date passed'], ['owed', 'Makeup owed'], ['unpaid', 'Payment outstanding'], ['closed', 'Closed'], ['all', 'Everything']].map(([k, l]) => `<option value="${k}" ${f.state === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
    <span class="muted small">${list.length} package${list.length === 1 ? '' : 's'}</span>${isAdmin() ? '<button class="btn sm" id="exportX" style="margin-left:auto">Export to Excel</button>' : ''}</div>
   <div class="tbl-wrap"><table><thead><tr><th>Student</th><th>Teacher</th><th>Used</th><th>Left</th><th>Makeups</th><th>Status</th><th>Payment</th><th>Lessons</th></tr></thead><tbody>${rows || '<tr><td colspan="8" class="empty">No packages match.</td></tr>'}</tbody></table></div>
   <div class="legend"><span><i class="chip">6 Sep</i> Present</span><span><i class="chip makeup">6 Sep</i> Makeup lesson</span><span><i class="chip absent">6 Sep</i> Absent, makeup owed</span><span><i class="chip cancelled">6 Sep</i> Teacher cancelled</span><span><i class="chip noshow">6 Sep</i> No-show (charged)</span></div>`;
@@ -458,14 +466,74 @@ function renderSetup() {
 }
 
 
+
+/* ---------- PAYMENTS ---------- */
+const PKIND = { package: 'Package', book: 'Book', trial: 'Trial lesson', single: 'Single session', other: 'Other' };
+const METHODS = ['Company account (link)', 'KNET machine', 'Paid to Ms. Chaimaa', 'Paid to Ms. Nilufar', 'Cash', 'Bank transfer'];
+const kd = n => `${Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 3 })} KD`;
+function paymentsSect(list, sid, pid) {
+  const paid = list.filter(x => x.status === 'paid').reduce((a, x) => a + Number(x.amount), 0);
+  const pend = list.filter(x => x.status === 'pending').reduce((a, x) => a + Number(x.amount), 0);
+  return `<div class="sect" id="paySect"><h3>Payments <span class="muted small" style="font-weight:400">${kd(paid)} paid${pend ? ` · ${kd(pend)} pending` : ''}</span></h3>
+   <div class="card" style="padding:4px 12px">${list.length ? list.map(x => `<div class="payrow"><div><b>${esc(kd(x.amount))}</b> <span class="pill ${x.status === 'paid' ? 'ok' : 'warn'}">${x.status === 'paid' ? 'Paid' : 'Pending'}</span> <span class="small muted">${esc(PKIND[x.kind] || x.kind)}${x.paid_on ? ' · ' + esc(fmtD(x.paid_on)) : ''}${!pid && x.package_id ? ' · ' + esc(tname(S.packages[x.package_id]?.teacherId)) : ''}</span><div class="small muted">${esc(x.method || '')}${x.note ? ' · ' + esc(x.note) : ''}</div></div><div style="display:flex;gap:4px">${x.status === 'pending' ? `<button class="btn sm" data-pay-mark="${esc(x.id)}">Mark paid</button>` : ''}<button class="btn ghost sm" data-pay-del="${esc(x.id)}" aria-label="Delete payment">✕</button></div></div>`).join('') : '<div class="empty small">No payments recorded.</div>'}</div>
+   <div class="payadd"><input type="number" min="0" step="0.001" id="payAmt" placeholder="Amount (KD)" aria-label="Amount"><input type="text" id="payMethod" list="payMethods" placeholder="Method" aria-label="Method"><datalist id="payMethods">${METHODS.map(m => `<option value="${esc(m)}">`).join('')}</datalist>
+    <select id="payKind" aria-label="For">${Object.entries(PKIND).map(([k, v]) => `<option value="${k}" ${k === (pid ? 'package' : 'book') ? 'selected' : ''}>${v}</option>`).join('')}</select>
+    <select id="payStatus" aria-label="Status"><option value="paid">Paid</option><option value="pending">Pending</option></select>
+    <input type="date" id="payOn" value="${kwToday()}" aria-label="Date"><input type="text" id="payNote" placeholder="Note" aria-label="Note">
+    <button class="btn sm primary" id="payAdd" data-sid="${esc(sid)}" data-pid="${esc(pid || '')}">Add payment</button></div></div>`;
+}
+function wirePayments() {
+  const ov = $('#overlay');
+  ov.querySelectorAll('[data-pay-del]').forEach(b => b.onclick = () => { const x = S.payments.find(y => y.id === b.dataset.payDel); confirmBox(`Delete the ${kd(x?.amount)} payment? This is recorded in History.`, () => run(sb.from('payments').delete().eq('id', b.dataset.payDel), 'Payment deleted').then(() => renderOverlay(true)), 'Delete'); });
+  ov.querySelectorAll('[data-pay-mark]').forEach(b => b.onclick = () => run(sb.from('payments').update({ status: 'paid', paid_on: kwToday() }).eq('id', b.dataset.payMark), 'Marked as paid').then(() => renderOverlay(true)).catch(() => {}));
+  const add = $('#payAdd'); if (!add) return;
+  add.onclick = () => {
+    const amount = Number($('#payAmt').value); if (!(amount > 0)) return toast('Enter the amount');
+    const row = { student_id: add.dataset.sid, package_id: add.dataset.pid || null, amount, method: $('#payMethod').value.trim(), kind: $('#payKind').value, status: $('#payStatus').value, paid_on: $('#payOn').value || null, note: $('#payNote').value.trim() };
+    run(sb.from('payments').insert(row), 'Payment recorded').then(() => renderOverlay(true)).catch(() => {});
+  };
+}
+function renderPayments() {
+  const f = S.payFilter; const q = f.q.trim().toLowerCase();
+  const all = S.payments;
+  const list = all.filter(x => (f.method === 'all' || (x.method || '—') === f.method) && (f.status === 'all' || x.status === f.status) && (!q || (sname(x.student_id) + ' ' + x.note + ' ' + x.method).toLowerCase().includes(q)));
+  const paid = all.filter(x => x.status === 'paid'); const pend = all.filter(x => x.status === 'pending');
+  const total = a => a.reduce((s, x) => s + Number(x.amount), 0);
+  const byMethod = {}; for (const x of paid) byMethod[x.method || '—'] = (byMethod[x.method || '—'] || 0) + Number(x.amount);
+  const byTeacher = {}; for (const x of paid) { const t = x.package_id ? S.packages[x.package_id]?.teacherId : null; const k = t ? tname(t) : 'Not linked to a teacher'; byTeacher[k] = (byTeacher[k] || 0) + Number(x.amount); }
+  const unpaidPk = pkgList().filter(p => !p.closed && p.payment !== 'paid');
+  const tiles = (obj) => Object.entries(obj).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="mrow"><span>${esc(k)}</span><b class="num">${esc(kd(v))}</b></div>`).join('');
+  $('#view').innerHTML = `
+  <div class="bar"><h2>Payments</h2></div>
+  <div class="paygrid">
+   <div class="stat"><b>${esc(kd(total(paid)))}</b><span>collected · ${paid.length} payments</span></div>
+   <div class="stat"><b style="color:var(--warn)">${esc(kd(total(pend)))}</b><span>pending · ${pend.length}</span></div>
+   <div class="stat"><b style="color:var(--bad)">${unpaidPk.length}</b><span>open packages not fully paid</span></div>
+  </div>
+  <div class="paycols">
+   <div class="card" style="padding:12px 14px"><div class="eyebrow">By method</div>${tiles(byMethod) || '<p class="small muted">No payments yet.</p>'}</div>
+   <div class="card" style="padding:12px 14px"><div class="eyebrow">By teacher</div>${tiles(byTeacher) || '<p class="small muted">No payments yet.</p>'}</div>
+   <div class="card" style="padding:12px 14px"><div class="eyebrow">Not fully paid</div>${unpaidPk.map(p => `<div class="mrow"><a data-open-pkg="${esc(p.id)}" style="cursor:pointer;color:var(--accent)">${esc(sname(p.studentId))}</a><span class="small muted">${esc(tname(p.teacherId))} · ${esc(PAY[p.payment]?.[0] || '')}</span></div>`).join('') || '<p class="small muted">Everyone has paid.</p>'}</div>
+  </div>
+  <div class="filters" style="margin:16px 0 12px">
+   <input type="search" id="yq" placeholder="Search student or note" value="${esc(f.q)}" aria-label="Search payments">
+   <select id="ym" aria-label="Method"><option value="all">Any method</option>${[...new Set(all.map(x => x.method || '—'))].sort().map(m => `<option ${f.method === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>
+   <select id="ys" aria-label="Status"><option value="all">Paid and pending</option><option value="paid" ${f.status === 'paid' ? 'selected' : ''}>Paid</option><option value="pending" ${f.status === 'pending' ? 'selected' : ''}>Pending</option></select>
+   <span class="muted small">${list.length} payments · ${esc(kd(total(list.filter(x => x.status === 'paid'))))}</span></div>
+  <div class="tbl-wrap"><table><thead><tr><th>Student</th><th>Amount</th><th>For</th><th>Method</th><th>Status</th><th>Note</th></tr></thead><tbody>${list.map(x => `<tr ${x.package_id ? `data-open-pkg="${esc(x.package_id)}"` : `data-open-stu="${esc(x.student_id)}"`}><td><b>${esc(sname(x.student_id))}</b>${x.package_id ? `<div class="small muted">${esc(tname(S.packages[x.package_id]?.teacherId))}</div>` : ''}</td><td class="num">${esc(kd(x.amount))}</td><td>${esc(PKIND[x.kind] || x.kind)}</td><td class="small">${esc(x.method || '—')}</td><td><span class="pill ${x.status === 'paid' ? 'ok' : 'warn'}">${x.status === 'paid' ? 'Paid' : 'Pending'}</span></td><td class="small muted">${esc(x.note || '')}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">No payments match.</td></tr>'}</tbody></table></div>`;
+  $('#yq').oninput = e => { f.q = e.target.value; const pos = e.target.selectionStart; render(); const el = $('#yq'); el.focus(); el.setSelectionRange(pos, pos); };
+  $('#ym').onchange = e => { f.method = e.target.value; render(); };
+  $('#ys').onchange = e => { f.status = e.target.value; render(); };
+}
+
 /* ---------- HISTORY (super admin) ---------- */
-const AREAS = { all: 'Everything', lessons: 'Attendance', packages: 'Packages', students: 'Students', slots: 'Timetable', teachers: 'Teachers', profiles: 'People & access', settings: 'Settings', session: 'Sign-ins & exports' };
+const AREAS = { all: 'Everything', lessons: 'Attendance', packages: 'Packages', payments: 'Payments', students: 'Students', slots: 'Timetable', teachers: 'Teachers', profiles: 'People & access', settings: 'Settings', session: 'Sign-ins & exports' };
 const FIELD = {
   lesson_date: 'Date', status: 'Status', note: 'Note', package_id: 'Package', sessions: 'Lessons in package', per_week: 'Lessons per week', start_date: 'Start date',
   term: 'Term', payment: 'Payment', paid_note: 'Payment note', price: 'Price (KWD)', notes: 'Notes', closed: 'Closed', kind: 'Type', subject: 'Subject',
   teacher_id: 'Teacher', student_id: 'Student', name: 'Name', guardian: 'Guardian', phone: 'Phone', reg_form: 'Registration form', archived: 'Archived',
   day: 'Day', start_time: 'Start', dur: 'Length (min)', label: 'Label', subjects: 'Subjects', color: 'Colour', sort_order: 'Order', school_name: 'Studio name',
-  low_threshold: 'Warning level', role: 'Access', email: 'Email',
+  low_threshold: 'Warning level', role: 'Access', email: 'Email', end_date: 'End date', amount: 'Amount (KWD)', method: 'Method', paid_on: 'Paid on',
 };
 const HIDDEN_FIELDS = new Set(['id', 'created_at', 'created_by', 'user_id']);
 const pkgMemo = {};
@@ -484,7 +552,9 @@ function fmtVal(table, k, v) {
   if (k === 'package_id') return pkgLabel(v);
   if (k === 'day') return DAYS[v] || v;
   if (k === 'start_time') return fmtT(v);
-  if (k === 'lesson_date' || k === 'start_date') return fmtD(v, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+  if (k === 'kind' && table === 'payments') return PKIND[v] || v;
+  if (k === 'status' && table === 'payments') return v === 'paid' ? 'Paid' : 'Pending';
+  if (k === 'lesson_date' || k === 'start_date' || k === 'end_date' || k === 'paid_on') return fmtD(v, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
   if (typeof v === 'boolean') return v ? 'Yes' : 'No';
   return String(v);
 }
@@ -511,6 +581,12 @@ function describe(r) {
       if (A === 'DELETE') return `Deleted the package for <b>${esc(who)}</b>`;
       if (r.changed.length === 1 && r.changed[0] === 'closed') return `${d.closed ? 'Closed' : 'Reopened'} the package for <b>${esc(who)}</b>`;
       return `Changed the package for <b>${esc(who)}</b>`;
+    }
+    case 'payments': {
+      const who = sname(d.student_id); const amt = `${Number(d.amount).toFixed(3).replace(/\.?0+$/, '')} KD`;
+      if (A === 'INSERT') return `Recorded a ${esc(d.status === 'pending' ? 'pending ' : '')}payment of <b>${esc(amt)}</b> from <b>${esc(who)}</b>${d.method ? ` (${esc(d.method)})` : ''}`;
+      if (A === 'DELETE') return `Deleted the ${esc(amt)} payment from <b>${esc(who)}</b>`;
+      return `Changed a payment from <b>${esc(who)}</b>`;
     }
     case 'students': return `${A === 'INSERT' ? 'Added' : A === 'DELETE' ? 'Deleted' : r.changed.length === 1 && r.changed[0] === 'archived' ? (d.archived ? 'Archived' : 'Restored') : 'Changed'} student <b>${esc(d.name)}</b>`;
     case 'slots': {
@@ -638,6 +714,7 @@ function drawPackage(id) {
   const log = (p.log || []).map(e => `<div class="logrow"><input type="date" value="${esc(e.d)}" data-lg="${esc(e.id)}|lesson_date" aria-label="Date"><select data-lg="${esc(e.id)}|status" aria-label="Status">${opts(ST, e.s)}</select><input class="lnote" type="text" value="${esc(e.n || '')}" placeholder="Note" data-lg="${esc(e.id)}|note" aria-label="Note"><button class="btn ghost sm" data-lgdel="${esc(e.id)}" aria-label="Remove">✕</button></div>`).join('');
   shell(sname(p.studentId), `${esc(tname(p.teacherId))} · ${esc(KINDS[p.kind] || '')} package${p.term ? ' · ' + esc(p.term) : ''}`, `
    ${p.closed ? '<div class="infobox">This package is closed. It is kept for history.</div>' : s.used > s.total ? `<div class="badbox">${s.used - s.total} lesson(s) used beyond the package. Renew and move the extra lessons, or adjust the size.</div>` : s.state === 'finished' ? '<div class="badbox">All lessons used. Renew to keep marking attendance.</div>' : ''}
+   ${s.ended ? `<div class="warnbox">This package's end date (${esc(fmtD(p.end))}) has passed${s.left > 0 ? ` with ${s.left} lessons not used` : ''}. Renew or close it.</div>` : ''}
    <div class="stats"><div class="stat"><b>${s.used}</b><span>used of ${s.total}</span></div><div class="stat"><b style="color:${s.left <= 0 ? 'var(--bad)' : s.state === 'low' ? 'var(--warn)' : 'inherit'}">${s.left}</b><span>left</span></div><div class="stat"><b>${s.owed}</b><span>makeups owed</span></div><div class="stat"><b>${s.c.absent + s.c.cancelled}</b><span>missed</span></div></div>
    <div class="sect"><h3>Lessons <span class="muted small" style="font-weight:400">${(p.log || []).length} logged${s.last ? ' · last ' + esc(fmtD(s.last)) : ''}</span></h3>
     <div class="card" style="padding:4px 12px"><div class="loglist">${log || '<div class="empty small">No lessons logged yet.</div>'}</div></div>
@@ -649,6 +726,7 @@ function drawPackage(id) {
     <label class="f">Lessons in package<input type="number" min="1" id="pN" value="${esc(p.sessions)}" ${dis}></label>
     <label class="f">Lessons per week<input type="number" min="1" max="7" id="pW" value="${esc(p.perWeek || 1)}" ${dis}></label>
     <label class="f">Start date<input type="date" id="pS" value="${esc(p.start || '')}" ${dis}></label>
+    <label class="f">End date<input type="date" id="pE" value="${esc(p.end || '')}" ${dis}></label>
     <label class="f">Term or month<input type="text" id="pTerm" value="${esc(p.term || '')}" ${dis}></label>
     <label class="f">Subject<input type="text" id="pSub" value="${esc(p.subject || '')}" placeholder="Piano, Vocal…" ${dis}></label>
     <label class="f">Payment<select id="pP" ${dis}>${opts(PAY, p.payment || 'unpaid')}</select></label>
@@ -658,13 +736,15 @@ function drawPackage(id) {
    ${A ? `<div class="row-end"><button class="btn danger sm" id="pDel">Delete package</button>${p.closed ? '<button class="btn sm" id="pReopen">Reopen</button>' : '<button class="btn sm" id="pClose">Close</button><button class="btn sm" id="pRenew">Renew</button>'}<button class="btn primary sm" id="pSave">Save package</button></div>` : '<p class="small muted" style="margin:0">Only a super admin can change package details.</p>'}</div>
    <div class="sect"><h3>Weekly times with ${esc(tname(p.teacherId))}</h3><div class="small">${slotsOf(p.teacherId).filter(x => x.studentId === p.studentId).map(x => `${DAYS[x.day]} ${fmtT(x.start)} (${x.dur} min)${x.status === 'tentative' ? ' · not confirmed' : ''}`).join('<br>') || '<span class="muted">Not on the timetable.</span>'}</div>
    <div><button class="btn sm" data-open-stu="${esc(p.studentId)}">Open student</button></div></div>
+   ${A ? paymentsSect(S.payments.filter(x => x.package_id === id), p.studentId, id) : ''}
    ${A ? `<div class="sect"><h3>Change history</h3><div id="recHist"><button class="btn sm" data-rec-hist="package|${esc(id)}">Show every change to this package</button></div></div>` : ''}`);
+  wirePayments();
   const ov = $('#overlay');
   ov.querySelectorAll('[data-lg]').forEach(el => el.onchange = () => { const [lid, col] = el.dataset.lg.split('|'); if (col === 'lesson_date' && !el.value) return; run(sb.from('lessons').update({ [col]: el.value }).eq('id', lid)).then(() => renderOverlay(true)).catch(() => {}); });
   ov.querySelectorAll('[data-lgdel]').forEach(b => b.onclick = () => run(sb.from('lessons').delete().eq('id', b.dataset.lgdel)).then(() => renderOverlay(true)).catch(() => {}));
   $('#nlAdd').onclick = () => { const d = $('#nlD').value; if (!d) return toast('Pick a date'); if (entryFor(p, d)) return toast('A lesson is already logged on that date'); run(sb.from('lessons').insert({ package_id: id, lesson_date: d, status: $('#nlS').value, note: $('#nlN').value.trim() }), 'Lesson added').then(() => renderOverlay(true)).catch(() => {}); };
   if (!A) return;
-  $('#pSave').onclick = () => savePkg(id, { teacherId: $('#pT').value, kind: $('#pK').value, sessions: Math.max(1, +$('#pN').value || 1), perWeek: Math.max(1, Math.min(7, +$('#pW').value || 1)), start: $('#pS').value, term: $('#pTerm').value.trim(), subject: $('#pSub').value.trim(), payment: $('#pP').value, price: $('#pPr').value === '' ? null : +$('#pPr').value, paidNote: $('#pPn').value.trim(), notes: $('#pNo').value }, 'Package saved').then(() => renderOverlay(true)).catch(() => {});
+  $('#pSave').onclick = () => savePkg(id, { teacherId: $('#pT').value, kind: $('#pK').value, sessions: Math.max(1, +$('#pN').value || 1), perWeek: Math.max(1, Math.min(7, +$('#pW').value || 1)), start: $('#pS').value, end: $('#pE').value, term: $('#pTerm').value.trim(), subject: $('#pSub').value.trim(), payment: $('#pP').value, price: $('#pPr').value === '' ? null : +$('#pPr').value, paidNote: $('#pPn').value.trim(), notes: $('#pNo').value }, 'Package saved').then(() => renderOverlay(true)).catch(() => {});
   $('#pDel').onclick = () => confirmBox(`Delete this package and its ${(p.log || []).length} logged lessons? This cannot be undone. To keep the history, close it instead.`, async () => { closeOverlay(); await run(sb.from('packages').delete().eq('id', id), 'Package deleted'); }, 'Delete');
   if ($('#pClose')) $('#pClose').onclick = () => savePkg(id, { closed: true }, 'Package closed').catch(() => {});
   if ($('#pReopen')) $('#pReopen').onclick = () => savePkg(id, { closed: false }, 'Package reopened').catch(() => {});
@@ -686,8 +766,10 @@ function drawStudent(id) {
    <div class="sect"><h3>Packages</h3>${pk.map(p => { const st = stats(p); return `<div class="card" style="padding:10px 12px;cursor:pointer" data-open-pkg="${esc(p.id)}"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="dot" style="background:${esc(tcolor(p.teacherId))}"></span><b>${esc(tname(p.teacherId))}</b><span class="muted small">${esc(KINDS[p.kind] || '')} · ${esc(p.term || '')}</span><span style="margin-left:auto" class="pill ${p.closed ? '' : st.state === 'finished' ? 'bad' : st.state === 'low' ? 'warn' : 'ok'}">${p.closed ? 'Closed' : st.left + ' left'}</span></div>${meter(st)}${chips(p)}</div>`; }).join('') || '<p class="muted small">No packages yet.</p>'}
     ${A ? '<div><button class="btn sm" id="sNewPkg">New package</button></div>' : ''}</div>
    <div class="sect"><h3>Weekly timetable</h3><div class="small">${sl.map(x => `<span class="dot" style="background:${esc(tcolor(x.teacherId))}"></span> ${DAYS[x.day]} ${fmtT(x.start)} · ${esc(tname(x.teacherId))}${x.status === 'tentative' ? ' · not confirmed' : ''}`).join('<br>') || '<span class="muted">Not on the timetable.</span>'}</div></div>
+   ${A ? paymentsSect(S.payments.filter(x => x.student_id === id), id, null) : ''}
    ${A ? `<div class="sect"><h3>Change history</h3><div id="recHist"><button class="btn sm" data-rec-hist="student|${esc(id)}">Show every change for this student</button></div></div>` : ''}`);
   if (!A) return;
+  wirePayments();
   $('#sSave').onclick = () => { const patch = { name: $('#sN').value.trim(), guardian: $('#sG').value.trim(), phone: $('#sP').value.trim(), regForm: $('#sF').value, notes: $('#sNo').value }; if (!patch.name) return toast('A student needs a name'); run(sb.from('students').update(toRow(patch, stuCols)).eq('id', id), 'Student saved').then(() => renderOverlay(true)).catch(() => {}); };
   $('#sArch').onclick = () => run(sb.from('students').update({ archived: !s.archived }).eq('id', id), s.archived ? 'Restored' : 'Archived').catch(() => {});
   $('#sNewPkg').onclick = () => openModal('newpkg', { studentId: id });
@@ -730,6 +812,7 @@ function drawModal() {
      <label class="f">Lessons in package<input type="number" id="mNn" min="1" value="${esc(old?.sessions || 30)}"></label>
      <label class="f">Lessons per week<input type="number" id="mW" min="1" max="7" value="${esc(old?.perWeek || 2)}"></label>
      <label class="f">Start date<input type="date" id="mS" value="${kwToday()}"></label>
+     <label class="f">End date<input type="date" id="mE" value=""></label>
      <label class="f">Term or month<input type="text" id="mTerm" value="${esc(old?.term && old.kind === 'semester' ? old.term : (S.settings.term || ''))}"></label>
      <label class="f">Payment<select id="mP">${Object.entries(PAY).map(([k, v]) => `<option value="${k}" ${k === 'unpaid' ? 'selected' : ''}>${v[0]}</option>`).join('')}</select></label>
      <label class="f">Price (KWD)<input type="number" id="mPr" min="0" step="0.001"></label></div>
@@ -740,7 +823,7 @@ function drawModal() {
     $('#mOk').onclick = async () => {
       const sid = old ? old.studentId : $('#mSt').value; if (!sid) return toast('Choose a student'); const tid = $('#mT').value; if (!tid) return toast('Add a teacher first');
       const id = `${tid}--${sid}--${Date.now().toString(36)}`;
-      const row = { id, student_id: sid, teacher_id: tid, subject: old?.subject || '', kind: $('#mK').value, sessions: Math.max(1, +$('#mNn').value || 1), per_week: Math.max(1, Math.min(7, +$('#mW').value || 1)), start_date: $('#mS').value || kwToday(), term: $('#mTerm').value.trim(), payment: $('#mP').value, price: $('#mPr').value === '' ? null : +$('#mPr').value, notes: old && os.owed ? `${os.owed} makeup(s) still owed from the previous package.` : '' };
+      const row = { id, student_id: sid, teacher_id: tid, subject: old?.subject || '', kind: $('#mK').value, sessions: Math.max(1, +$('#mNn').value || 1), per_week: Math.max(1, Math.min(7, +$('#mW').value || 1)), start_date: $('#mS').value || kwToday(), end_date: $('#mE').value || null, term: $('#mTerm').value.trim(), payment: $('#mP').value, price: $('#mPr').value === '' ? null : +$('#mPr').value, notes: old && os.owed ? `${os.owed} makeup(s) still owed from the previous package.` : '' };
       try {
         await run(sb.from('packages').insert(row));
         if (old) {
@@ -824,10 +907,10 @@ document.addEventListener('click', async e => {
 async function exportXlsx() {
   const X = await import('xlsx');
   const wb = X.utils.book_new();
-  const att = [['Teacher', 'Student', 'Type', 'Term', 'Lessons', 'Used', 'Left', 'Makeups owed', 'Payment', 'Status', 'Lessons logged']];
+  const att = [['Teacher', 'Student', 'Subject', 'Type', 'Term', 'Start', 'End', 'Lessons', 'Used', 'Left', 'Makeups owed', 'Payment', 'Status', 'Lessons logged']];
   for (const p of pkgList().sort((a, b) => tname(a.teacherId).localeCompare(tname(b.teacherId)) || sname(a.studentId).localeCompare(sname(b.studentId)))) {
     const s = stats(p);
-    att.push([tname(p.teacherId), sname(p.studentId), KINDS[p.kind] || p.kind, p.term || '', s.total, s.used, s.left, s.owed, PAY[p.payment]?.[0] || '', p.closed ? 'Closed' : s.state, ...(p.log || []).map(e => `${e.d}${e.s === 'present' ? '' : ' (' + (ST[e.s]?.seg || e.s) + ')'}`)]);
+    att.push([tname(p.teacherId), sname(p.studentId), p.subject || '', KINDS[p.kind] || p.kind, p.term || '', p.start || '', p.end || '', s.total, s.used, s.left, s.owed, PAY[p.payment]?.[0] || '', p.closed ? 'Closed' : s.state, ...(p.log || []).map(e => `${e.d}${e.s === 'present' ? '' : ' (' + (ST[e.s]?.seg || e.s) + ')'}`)]);
   }
   X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(att), 'Attendance');
   for (const t of teacherIds()) {
@@ -838,10 +921,13 @@ async function exportXlsx() {
   const st = [['Student', 'Guardian', 'Phone', 'Registration form', 'Notes', 'Archived']];
   for (const id of studentIds(true)) { const s = S.students[id]; st.push([s.name, s.guardian || '', s.phone || '', FORM[s.regForm]?.[0] || '', s.notes || '', s.archived ? 'Yes' : '']); }
   X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(st), 'Students');
+  const pays = [['Student', 'Teacher', 'Amount (KD)', 'For', 'Method', 'Status', 'Paid on', 'Note']];
+  for (const x of S.payments) pays.push([sname(x.student_id), x.package_id ? tname(S.packages[x.package_id]?.teacherId) : '', Number(x.amount), PKIND[x.kind] || x.kind, x.method || '', x.status, x.paid_on || '', x.note || '']);
+  X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(pays), 'Payments');
   X.writeFile(wb, `studio-${kwToday()}.xlsx`);
   sb.rpc('log_event', { p_action: 'EXPORT', p_detail: { file: `studio-${kwToday()}.xlsx`, packages: pkgList().length } }).then(() => {}, () => {});
 }
 
 /* ---------- start ---------- */
-try { const t = localStorage.getItem('sd-tab'); if (t && ['today', 'week', 'packages', 'students', 'history', 'setup'].includes(t)) S.tab = t; } catch (e) { /* ignore */ }
+try { const t = localStorage.getItem('sd-tab'); if (t && ['today', 'week', 'packages', 'students', 'payments', 'history', 'setup'].includes(t)) S.tab = t; } catch (e) { /* ignore */ }
 render();
