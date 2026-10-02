@@ -235,3 +235,9 @@ th{letter-spacing:.14em}
 .wk .blk.blocked .bt{opacity:1}
 .tbl-wrap td.mono{white-space:nowrap;font-variant-numeric:tabular-nums}
 .filters input[type=search]{min-width:min(300px,100%)}
+.phone{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.pbtn{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;padding:3px 7px;border-radius:99px;border:1px solid var(--line);background:var(--surface);color:var(--ink);text-decoration:none;line-height:1.2}
+.pbtn:hover{border-color:var(--gold)}
+.pbtn.wa{color:#1f8f4e;border-color:#bfe3cc}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .pbtn.wa{color:#5fd18f;border-color:#2c5a3e}}
+:root[data-theme="dark"] .pbtn.wa{color:#5fd18f;border-color:#2c5a3e}

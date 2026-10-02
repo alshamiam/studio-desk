@@ -52,6 +52,11 @@ const tcolor = id => S.teachers[id]?.color || '#778';
 const teacherIds = () => Object.keys(S.teachers).sort((a, b) => (S.teachers[a].order ?? 99) - (S.teachers[b].order ?? 99) || tname(a).localeCompare(tname(b)));
 const studentIds = incArch => Object.keys(S.students).filter(id => incArch || !S.students[id].archived).sort((a, b) => sname(a).localeCompare(sname(b)));
 const slotsOf = tid => S.teachers[tid]?.slots || [];
+function intlPhone(p) { let d = String(p || '').replace(/\D/g, ''); if (d.startsWith('00')) d = d.slice(2); if (d.length === 8) d = '965' + d; return d.length >= 8 ? d : ''; }
+function phoneLinks(p, big) {
+  const d = intlPhone(p); if (!d) return esc(p || '–');
+  return `<span class="phone"><span class="num">${esc(p)}</span><a class="pbtn" href="tel:+${d}" title="Call ${esc(p)}" aria-label="Call ${esc(p)}">📞${big ? ' Call' : ''}</a><a class="pbtn wa" href="https://wa.me/${d}" target="_blank" rel="noopener" title="WhatsApp ${esc(p)}" aria-label="WhatsApp ${esc(p)}"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2Zm4.5-6.1c-.2-.1-1.5-.7-1.7-.8s-.4-.1-.6.1-.7.8-.8 1-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.3-.4.3-.4.7-1.3a.5.5 0 0 0 0-.4l-.8-1.8c-.2-.5-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2 5.2 5.2 0 0 0 1.1 2.8 11.9 11.9 0 0 0 4.6 4 5.2 5.2 0 0 0 3.2.7 2.7 2.7 0 0 0 1.8-1.3 2.2 2.2 0 0 0 .2-1.3c-.1-.1-.3-.2-.5-.3Z"/></svg>${big ? ' WhatsApp' : ''}</a></span>`;
+}
 function toast(msg) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 2800); }
 
 function stats(p) {
@@ -395,7 +400,7 @@ function renderStudents() {
   });
   const rows = ids.map(id => {
     const s = S.students[id]; const sl = studentSlots(id); const tset = [...new Set([...pkgList().filter(p => p.studentId === id && !p.closed).map(p => p.teacherId), ...sl.map(x => x.teacherId)])];
-    return `<tr data-open-stu="${esc(id)}"><td><b>${esc(s.name)}</b>${s.notes ? `<div class="small muted" style="max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(s.notes)}</div>` : ''}</td><td>${esc(s.guardian || '–')}</td><td class="mono small">${esc(s.phone || '–')}</td>
+    return `<tr data-open-stu="${esc(id)}"><td><b>${esc(s.name)}</b>${s.notes ? `<div class="small muted" style="max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(s.notes)}</div>` : ''}</td><td>${esc(s.guardian || '–')}</td><td class="mono small">${phoneLinks(s.phone)}</td>
     <td><span class="pill ${FORM[s.regForm]?.[1]}">${esc(FORM[s.regForm]?.[0] || '')}</span></td>
     <td>${tset.map(t => `<span class="pill"><span class="dot" style="background:${esc(tcolor(t))}"></span>${esc(tname(t))}</span>`).join(' ') || '<span class="muted">–</span>'}</td>
     <td class="small">${sl.map(x => `${DS[x.day]} ${fmtTs(x.start)}`).join(', ') || '<span class="muted">–</span>'}</td></tr>`;
@@ -780,7 +785,7 @@ function drawStudent(id) {
    <div class="grid2">
     <label class="f">Name<input type="text" id="sN" value="${esc(s.name)}" ${dis}></label>
     <label class="f">Parent / Guardian<input type="text" id="sG" value="${esc(s.guardian || '')}" ${dis}></label>
-    <label class="f">Phone<input type="tel" id="sP" value="${esc(s.phone || '')}" ${dis}></label>
+    <label class="f">Phone<input type="tel" id="sP" value="${esc(s.phone || '')}" ${dis}>${intlPhone(s.phone) ? `<span style="margin-top:4px">${phoneLinks(s.phone, true)}</span>` : ''}</label>
     <label class="f">Registration form<select id="sF" ${dis}>${Object.entries(FORM).map(([k, v]) => `<option value="${k}" ${s.regForm === k ? 'selected' : ''}>${v[0]}</option>`).join('')}</select></label>
    </div><label class="f">Notes<textarea id="sNo" ${dis}>${esc(s.notes || '')}</textarea></label>
    ${A ? `<div class="row-end"><button class="btn sm" id="sArch">${s.archived ? 'Restore' : 'Archive'}</button><button class="btn sm primary" id="sSave">Save student</button></div>` : ''}
@@ -923,6 +928,7 @@ function drawModal() {
 
 /* ---------- global click delegation ---------- */
 document.addEventListener('click', async e => {
+  if (e.target.closest('a.pbtn')) return;
   const t = e.target.closest('[data-open-pkg],[data-open-stu],[data-mark],[data-new-pkg],[data-goto-date],[data-add-slot],[data-edit-slot],[data-close]'); if (!t) return;
   if (t.hasAttribute('data-close')) return closeOverlay();
   if (t.dataset.openPkg) { e.preventDefault(); return openDrawer('package', t.dataset.openPkg); }
