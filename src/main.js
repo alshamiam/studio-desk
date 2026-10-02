@@ -118,7 +118,7 @@ function subscribe() {
 /* ---------- writes ---------- */
 async function run(promise, okMsg) {
   const { error } = await promise;
-  if (error) { console.error(error); toast(error.code === '42501' || /row-level security/i.test(error.message) ? 'You do not have permission to make this change.' : error.code === '23505' ? 'That already exists.' : error.code === '23503' ? 'This is still used elsewhere. Remove those records first.' : 'Could not save. Check your connection and try again.'); await loadAll(); throw error; }
+  if (error) { console.error(error); toast(/Past attendance is locked|reason is required/i.test(error.message) ? error.message : error.code === 'PGRST202' ? 'This action is not set up yet. Ask the admin to finish the database setup.' : error.code === '42501' || /row-level security/i.test(error.message) ? 'You do not have permission to make this change.' : error.code === '23505' ? 'That already exists.' : error.code === '23503' ? 'This is still used elsewhere. Remove those records first.' : 'Could not save. Check your connection and try again.'); await loadAll(); throw error; }
   if (okMsg) toast(okMsg);
   await loadAll();
 }
@@ -269,8 +269,11 @@ function attention() {
   add(forms.length, 'blue', 'Registration forms not signed', forms.map(id => `<li><a data-open-stu="${esc(id)}">${esc(sname(id))}</a> · ${esc(FORM[S.students[id].regForm]?.[0] || '')}</li>`).join(''));
   return items;
 }
+const isPast = d => d < kwToday();
 function segButtons(pid, d, cur, keys) {
-  return `<div class="seg" role="group" aria-label="Attendance">${keys.map(k => `<button data-mark="${esc(pid)}|${d}|${k}" class="${cur === k ? 'on-' + k : ''}" aria-pressed="${cur === k}">${ST[k].seg}</button>`).join('')}</div>`;
+  const locked = cur && isPast(d);
+  const lockTitle = isAdmin() ? 'Past attendance is locked. Click to correct it with a reason.' : 'Past attendance is locked. Ask a super admin to correct it.';
+  return `<div class="seg ${locked ? 'locked' : ''}" role="group" aria-label="Attendance" ${locked ? `title="${esc(lockTitle)}"` : ''}>${locked ? '<span class="lockico" aria-hidden="true">🔒</span>' : ''}${keys.map(k => `<button data-mark="${esc(pid)}|${d}|${k}" class="${cur === k ? 'on-' + k : ''}" aria-pressed="${cur === k}" ${locked && !isAdmin() ? 'disabled' : ''}>${ST[k].seg}</button>`).join('')}</div>`;
 }
 function renderToday() {
   const d = S.date || (S.date = kwToday()); const w = wd(d); const isToday = d === kwToday();
@@ -610,7 +613,8 @@ function describe(r) {
     default: return `${esc(A)} on ${esc(T)}`;
   }
 }
-function diffHtml(r) {
+function diffHtml(r) { return diffBody(r) + (r.reason ? `<div class="small"><span class="pill warn">Reason</span> ${esc(r.reason)}</div>` : ''); }
+function diffBody(r) {
   const T = r.table_name;
   if (r.action === 'UPDATE') {
     const keys = r.changed.filter(k => !HIDDEN_FIELDS.has(k));
@@ -727,7 +731,7 @@ function drawPackage(id) {
   const p = S.packages[id]; if (!p) { closeOverlay(); return; }
   const s = stats(p); const A = isAdmin(); const dis = A ? '' : 'disabled';
   const opts = (o, cur) => Object.entries(o).map(([k, v]) => `<option value="${k}" ${cur === k ? 'selected' : ''}>${esc(Array.isArray(v) ? v[0] : (v.label || v))}</option>`).join('');
-  const log = (p.log || []).map(e => `<div class="logrow"><input type="date" value="${esc(e.d)}" data-lg="${esc(e.id)}|lesson_date" aria-label="Date"><select data-lg="${esc(e.id)}|status" aria-label="Status">${opts(ST, e.s)}</select><input class="lnote" type="text" value="${esc(e.n || '')}" placeholder="Note" data-lg="${esc(e.id)}|note" aria-label="Note"><button class="btn ghost sm" data-lgdel="${esc(e.id)}" aria-label="Remove">✕</button></div>`).join('');
+  const log = (p.log || []).map(e => isPast(e.d) ? `<div class="logrow past"><span class="small">🔒 ${esc(fmtD(e.d))}</span><span class="chip ${esc(e.s)}" style="justify-self:start">${esc(ST[e.s]?.label || e.s)}</span><span class="lnote small muted">${esc(e.n || '')}</span>${A ? `<button class="btn ghost sm" data-correct="${esc(e.id)}" title="Correct this past mark (reason required)" aria-label="Correct">✎</button>` : '<span></span>'}</div>` : `<div class="logrow"><input type="date" value="${esc(e.d)}" data-lg="${esc(e.id)}|lesson_date" aria-label="Date"><select data-lg="${esc(e.id)}|status" aria-label="Status">${opts(ST, e.s)}</select><input class="lnote" type="text" value="${esc(e.n || '')}" placeholder="Note" data-lg="${esc(e.id)}|note" aria-label="Note"><button class="btn ghost sm" data-lgdel="${esc(e.id)}" aria-label="Remove">✕</button></div>`).join('');
   shell(sname(p.studentId), `${esc(tname(p.teacherId))} · ${esc(KINDS[p.kind] || '')} package${p.term ? ' · ' + esc(p.term) : ''}`, `
    ${p.closed ? '<div class="infobox">This package is closed. It is kept for history.</div>' : s.used > s.total ? `<div class="badbox">${s.used - s.total} lesson(s) used beyond the package. Renew and move the extra lessons, or adjust the size.</div>` : s.state === 'finished' ? '<div class="badbox">All lessons used. Renew to keep marking attendance.</div>' : ''}
    ${s.ended ? `<div class="warnbox">This package's end date (${esc(fmtD(p.end))}) has passed${s.left > 0 ? ` with ${s.left} lessons not used` : ''}. Renew or close it.</div>` : ''}
@@ -756,6 +760,7 @@ function drawPackage(id) {
    ${A ? timelineSect('package', id) : ''}`);
   wirePayments();
   const ov = $('#overlay');
+  ov.querySelectorAll('[data-correct]').forEach(b => b.onclick = () => openModal('correct', { pid: id, lessonId: b.dataset.correct }));
   ov.querySelectorAll('[data-lg]').forEach(el => el.onchange = () => { const [lid, col] = el.dataset.lg.split('|'); if (col === 'lesson_date' && !el.value) return; run(sb.from('lessons').update({ [col]: el.value }).eq('id', lid)).then(() => renderOverlay(true)).catch(() => {}); });
   ov.querySelectorAll('[data-lgdel]').forEach(b => b.onclick = () => { const e = (p.log || []).find(x => x.id === b.dataset.lgdel); confirmBox(`Remove the "${ST[e?.s]?.label || ''}" mark on ${fmtD(e?.d)}? This is recorded in History.`, () => run(sb.from('lessons').delete().eq('id', b.dataset.lgdel), 'Mark removed'), 'Remove mark'); });
   $('#nlAdd').onclick = () => { const d = $('#nlD').value; if (!d) return toast('Pick a date'); if (entryFor(p, d)) return toast('A lesson is already logged on that date'); run(sb.from('lessons').insert({ package_id: id, lesson_date: d, status: $('#nlS').value, note: $('#nlN').value.trim() }), 'Lesson added').then(() => renderOverlay(true)).catch(() => {}); };
@@ -801,6 +806,19 @@ function drawModal() {
   if (kind === 'confirm') {
     shell('Please confirm', '', `<p style="margin:0">${esc(ctx.msg)}</p><div class="row-end">${ctx.onYes ? cancel + `<button class="btn primary" id="mYes">${esc(ctx.yesLabel || 'Confirm')}</button>` : '<button class="btn primary" data-mcancel>OK</button>'}</div>`, true);
     if (ctx.onYes) $('#mYes').onclick = async () => { const f = ctx.onYes; backFromModal(); try { await f(); } catch (e) { /* toast shown */ } };
+  } else if (kind === 'correct') {
+    const p = S.packages[ctx.pid]; const e = (p?.log || []).find(x => x.id === ctx.lessonId); if (!e) { backFromModal(); return; }
+    const opts2 = Object.entries(ST).map(([k, v]) => `<option value="${k}" ${(ctx.status || e.s) === k ? 'selected' : ''}>${esc(v.label)}</option>`).join('');
+    shell('Correct past attendance', '', `<p style="margin:0">${esc(sname(p.studentId))} · ${esc(tname(p.teacherId))} · ${esc(fmtD(e.d, { weekday: 'long', day: 'numeric', month: 'long' }))}<br><span class="small muted">Currently: ${esc(ST[e.s]?.label || e.s)}${e.n ? ' · ' + esc(e.n) : ''}</span></p>
+     <div class="grid2"><label class="f">Date<input type="date" id="cD" value="${esc(e.d)}"></label><label class="f">Status<select id="cS">${opts2}</select></label></div>
+     <label class="f">Note<input type="text" id="cN" value="${esc(e.n || '')}"></label>
+     <label class="f">Reason for the correction (required)<textarea id="cR" style="min-height:70px" placeholder="e.g. Marked the wrong student by mistake"></textarea></label>
+     <div class="row-end"><button class="btn danger" id="cDel" style="margin-right:auto">Remove this mark</button>${cancel}<button class="btn primary" id="cOk">Save correction</button></div>`, true);
+    const reason = () => { const r = $('#cR').value.trim(); if (!r) { toast('Please give a reason'); $('#cR').focus(); } return r; };
+    $('#cOk').onclick = async () => { const r = reason(); if (!r) return; const d = $('#cD').value; if (!d) return toast('Pick a date'); backFromModal();
+      await run(sb.rpc('correct_lesson', { p_id: e.id, p_status: $('#cS').value, p_note: $('#cN').value.trim(), p_date: d, p_reason: r }), 'Attendance corrected').catch(() => {}); renderOverlay(true); };
+    $('#cDel').onclick = async () => { const r = reason(); if (!r) return; backFromModal();
+      await run(sb.rpc('remove_lesson', { p_id: e.id, p_reason: r }), 'Mark removed').catch(() => {}); renderOverlay(true); };
   } else if (kind === 'reason') {
     shell(ctx.title, '', `<p style="margin:0">${esc(ctx.msg)}</p><label class="f">${esc(ctx.label)}<textarea id="mReason" style="min-height:70px"></textarea></label><div class="row-end">${cancel}<button class="btn primary" id="mYes">${esc(ctx.yes || 'Confirm')}</button></div>`, true);
     $('#mYes').onclick = async () => { const reason = $('#mReason').value.trim(); if (ctx.required && !reason) return toast('Please give a reason'); const f = ctx.onYes; backFromModal(); try { await f(reason); renderOverlay(true); } catch (e) { /* toast shown */ } };
@@ -915,6 +933,7 @@ document.addEventListener('click', async e => {
   if (t.dataset.editSlot) return openModal('slot', { teacherId: S.weekTeacher, slotId: t.dataset.editSlot });
   if (t.dataset.mark) {
     const [pid, d, k] = t.dataset.mark.split('|'); const cur = entryFor(S.packages[pid], d);
+    if (cur && isPast(d)) { if (!isAdmin()) return toast('Past attendance is locked. Ask a super admin to correct it.'); return openModal('correct', { pid, lessonId: cur.id, status: cur.s === k ? null : k }); }
     t.closest('.seg')?.querySelectorAll('button').forEach(b => { b.disabled = true; });
     try { await setLog(pid, d, cur?.s === k ? null : k); } catch (err) { render(); }
   }

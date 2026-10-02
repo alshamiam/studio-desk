@@ -64,3 +64,10 @@ Signed-in users have no DELETE permission on students, packages, payments, teach
 Students are **archived**, packages are **closed** (with an optional reason stamped in the notes) and payments are **voided**
 (with a required reason; they stay visible, crossed out, and leave the totals). Only lesson marks and timetable slots can be removed,
 and both are recorded in the history. Each student and package page shows a full **timeline** of its changes, including renewals.
+
+## Past attendance is locked
+
+Once a lesson's date has passed (Kuwait time), its mark can't be changed or removed with a click. Teachers can still mark
+a past lesson that nobody marked, but can't change an existing one. Super admins correct past marks through
+**Correct past attendance**, which requires a reason; the reason is shown in History next to the change.
+Enforced in the database by `guard_past_lessons` and the `correct_lesson` / `remove_lesson` functions.

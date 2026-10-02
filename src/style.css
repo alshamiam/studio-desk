@@ -222,3 +222,6 @@ th{letter-spacing:.14em}
 .mrow{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-top:1px solid var(--line);font-size:14px}
 .mrow:first-of-type{border-top:0}
 .payrow.void b,.payrow.void .small{text-decoration:line-through;opacity:.6}
+.seg.locked{opacity:.75;position:relative}
+.seg .lockico{display:inline-flex;align-items:center;padding:0 6px;font-size:12px;border-right:1px solid var(--line)}
+.logrow.past{grid-template-columns:118px 150px minmax(0,1fr) 30px;color:var(--ink)}
