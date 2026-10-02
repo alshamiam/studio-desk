@@ -219,7 +219,7 @@ function renderChrome() {
   document.title = 'Studio Desk · ' + (S.settings.schoolName || 'Aria Music Academy');
   $('#brandTerm').textContent = inApp ? (S.settings.term || '') : '';
   const w = $('#whoMe'); w.hidden = !S.session;
-  if (S.session) w.innerHTML = `<span title="${esc(S.session.user.email)}">${esc(S.me ? (S.me.role === 'admin' ? 'Super admin' : S.me.role === 'teacher' && myTeacher() ? tname(myTeacher()) : S.session.user.email) : S.session.user.email)}</span><button class="btn sm ghost" id="signOut" title="Signed in as ${esc(S.session.user.email)}">Sign out</button>`;
+  if (S.session) w.innerHTML = `<span title="${esc(S.session.user.email)}">${esc(S.me ? (S.me.role === 'admin' ? (myTeacher() ? `${tname(myTeacher())} · Super admin` : 'Super admin') : S.me.role === 'teacher' && myTeacher() ? tname(myTeacher()) : S.session.user.email) : S.session.user.email)}</span><button class="btn sm ghost" id="signOut" title="Signed in as ${esc(S.session.user.email)}">Sign out</button>`;
   if (S.session) $('#signOut').onclick = async () => { await sb.rpc('log_event', { p_action: 'SIGN_OUT' }).then(() => {}, () => {}); await sb.auth.signOut(); if (channel) { sb.removeChannel(channel); channel = null; } closeOverlay(); };
 }
 function render() {
