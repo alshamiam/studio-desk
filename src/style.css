@@ -233,3 +233,5 @@ th{letter-spacing:.14em}
 .blk.short .one .bt{font-size:11.5px;opacity:.85}
 .wk .blk.blocked{background:var(--brk-bg)!important;color:var(--brk-ink)!important;border-left:4px solid var(--gold)!important;outline:1px solid var(--brk-line);outline-offset:-1px}
 .wk .blk.blocked .bt{opacity:1}
+.tbl-wrap td.mono{white-space:nowrap;font-variant-numeric:tabular-nums}
+.filters input[type=search]{min-width:min(300px,100%)}
