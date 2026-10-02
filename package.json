@@ -1,0 +1,18 @@
+{
+  "name": "studio-desk",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.117.2",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "vite": "^8.3.2"
+  }
+}
