@@ -57,3 +57,10 @@ Every insert, update and delete on every table is recorded by database triggers 
 (who, when, full before/after row, list of changed fields), plus sign-ins, sign-outs and Excel exports.
 The log is read-only for everyone and readable only by super admins. Changes made directly in the Supabase
 dashboard are recorded too, as "System (database)".
+
+## Nothing is permanently deleted
+
+Signed-in users have no DELETE permission on students, packages, payments, teachers, settings or accounts (enforced by the database).
+Students are **archived**, packages are **closed** (with an optional reason stamped in the notes) and payments are **voided**
+(with a required reason; they stay visible, crossed out, and leave the totals). Only lesson marks and timetable slots can be removed,
+and both are recorded in the history. Each student and package page shows a full **timeline** of its changes, including renewals.
