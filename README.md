@@ -14,7 +14,7 @@ Replaces the old "Schedules and attendance" spreadsheet.
 | Timetable | Weekly grid per teacher. Click to add or edit a lesson time. Flags clashes and shows open times |
 | Attendance | Every package: lessons used and left, makeups owed, payment, and the lesson log |
 | Students | Guardian, phone, registration form, packages and weekly times |
-| Setup (admin) | People and access, studio settings, teachers, Excel export |
+| Setup (super admin) | People and access, studio settings, teachers, Excel export |
 
 ## How lessons count
 
@@ -25,11 +25,11 @@ Replaces the old "Schedules and attendance" spreadsheet.
 
 | Role | Can |
 | --- | --- |
-| Admin | Everything |
+| Super admin | Everything: all teachers, students, packages, payments, people and settings |
 | Teacher | See their own students, packages and timetable; mark attendance; edit their own timetable |
-| Waiting for approval | Nothing. New sign-ups land here until an admin approves them in Setup → People |
+| Waiting for approval | Nothing. New sign-ups land here until a super admin approves them in Setup → People |
 
-Emails in the `public.app_admins` table become admin automatically when they sign up.
+Emails in the `public.app_admins` table become super admin automatically when they sign up. A super admin can promote anyone else in Setup → People.
 All rules are enforced in the database with row-level security (`supabase/migrations`).
 
 ## Develop

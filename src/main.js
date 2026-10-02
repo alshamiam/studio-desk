@@ -30,7 +30,7 @@ const ST = {
 const KINDS = { semester: 'Semester', monthly: 'Monthly', trial: 'Trial', custom: 'Custom' };
 const PAY = { paid: ['Paid', 'ok'], partial: ['Part paid', 'warn'], unpaid: ['Not paid', 'bad'] };
 const FORM = { none: ['No form', 'bad'], sent: ['Sent, not signed', 'warn'], signed: ['Signed', 'ok'] };
-const ROLES = { admin: 'Admin', teacher: 'Teacher', pending: 'Waiting for approval' };
+const ROLES = { admin: 'Super admin (full access)', teacher: 'Teacher (own students only)', pending: 'Waiting for approval' };
 
 /* ---------- helpers ---------- */
 const $ = s => document.querySelector(s);
@@ -160,7 +160,7 @@ function renderAuth() {
     <div id="aMsg" class="small"></div>
     <button class="btn primary" type="submit" style="justify-content:center">${S.recovery ? 'Save password' : m === 'signup' ? 'Create account' : m === 'reset' ? 'Email me a reset link' : 'Sign in'}</button>
     ${S.recovery ? '' : `<div class="links">${m === 'signin' ? '<button type="button" class="linkbtn" data-am="signup">Create an account</button><button type="button" class="linkbtn" data-am="reset">Forgot password?</button>' : '<button type="button" class="linkbtn" data-am="signin">Back to sign in</button>'}</div>`}
-    ${m === 'signup' ? '<p class="small muted" style="margin:0">New accounts wait for the studio admin to approve them and link them to a teacher.</p>' : ''}
+    ${m === 'signup' ? '<p class="small muted" style="margin:0">New accounts wait for a super admin to approve them.</p>' : ''}
   </form></div>`;
   document.querySelectorAll('[data-am]').forEach(b => b.onclick = () => { S.authMode = b.dataset.am; render(); });
   const msg = (t, bad) => { $('#aMsg').innerHTML = `<div class="${bad ? 'badbox' : 'infobox'}">${esc(t)}</div>`; };
@@ -200,7 +200,7 @@ function renderChrome() {
   $('#brandName').textContent = S.settings.schoolName || 'Studio Desk';
   $('#brandTerm').textContent = inApp ? (S.settings.term || '') : '';
   const w = $('#whoMe'); w.hidden = !S.session;
-  if (S.session) w.innerHTML = `<span>${esc(S.session.user.email)}${S.me ? ' · ' + esc(S.me.role === 'teacher' && myTeacher() ? tname(myTeacher()) : ROLES[S.me.role] || '') : ''}</span><button class="btn sm ghost" id="signOut">Sign out</button>`;
+  if (S.session) w.innerHTML = `<span>${esc(S.session.user.email)}${S.me ? ' · ' + esc(S.me.role === 'admin' ? 'Super admin' : S.me.role === 'teacher' && myTeacher() ? tname(myTeacher()) : ROLES[S.me.role] || '') : ''}</span><button class="btn sm ghost" id="signOut">Sign out</button>`;
   if (S.session) $('#signOut').onclick = async () => { await sb.auth.signOut(); if (channel) { sb.removeChannel(channel); channel = null; } closeOverlay(); };
 }
 function render() {
@@ -208,8 +208,8 @@ function render() {
   const v = $('#view');
   if (!S.session || S.recovery) { renderAuth(); return; }
   if (!S.me) { v.innerHTML = '<div class="empty">Loading…</div>'; return; }
-  if (S.me.role === 'pending') { v.innerHTML = `<div class="auth"><div class="card"><h2>Almost there</h2><p style="margin:0">Your account (${esc(S.session.user.email)}) is waiting for the studio admin to approve it. Ask them to open Setup → People and give you access.</p><button class="btn" id="recheck">Check again</button></div></div>`; $('#recheck').onclick = boot; return; }
-  if (S.me.role === 'teacher' && !myTeacher()) { v.innerHTML = `<div class="card empty"><h2>Not linked to a teacher yet</h2><p>Ask the studio admin to link your account to your teacher name in Setup → People.</p></div>`; return; }
+  if (S.me.role === 'pending') { v.innerHTML = `<div class="auth"><div class="card"><h2>Almost there</h2><p style="margin:0">Your account (${esc(S.session.user.email)}) is waiting for the studio admin to approve it. Ask a super admin to open Setup → People and give you access.</p><button class="btn" id="recheck">Check again</button></div></div>`; $('#recheck').onclick = boot; return; }
+  if (S.me.role === 'teacher' && !myTeacher()) { v.innerHTML = `<div class="card empty"><h2>Not linked to a teacher yet</h2><p>Ask a super admin to link your account to your teacher name in Setup → People.</p></div>`; return; }
   if (!S.loaded) { v.innerHTML = '<div class="empty">Loading the studio…</div>'; return; }
   if (S.tab === 'setup' && !isAdmin()) S.tab = 'today';
   ({ today: renderToday, week: renderWeek, packages: renderPackages, students: renderStudents, setup: renderSetup })[S.tab]();
@@ -408,7 +408,7 @@ function renderSetup() {
   $('#view').innerHTML = `
   <div class="bar"><h2>Setup</h2><button class="btn" id="exportX">Export to Excel</button></div>
   <section style="margin-bottom:22px"><h2 style="font-size:20px;margin-bottom:6px">People</h2>
-   <p class="small muted" style="margin:0 0 10px">Anyone can create an account from the sign-in page. They see nothing until you approve them here. Teachers see and mark only their own students; admins see everything.</p>
+   <p class="small muted" style="margin:0 0 10px">Anyone can create an account from the sign-in page. They see nothing until you approve them here. Super admins see and change everything. Teachers see and mark only their own students. A super admin who also teaches can be linked to their teacher name too, so their timetable opens first.</p>
    <div class="tbl-wrap people"><table><thead><tr><th>Email</th><th>Access</th><th>Teacher</th><th></th></tr></thead><tbody>${people || '<tr><td colspan="4" class="empty">No accounts yet.</td></tr>'}</tbody></table></div></section>
   <section class="card" style="padding:16px;margin-bottom:18px"><div class="grid2">
     <label class="f">Studio name<input type="text" id="setName" value="${esc(st.schoolName || '')}"></label>
@@ -497,7 +497,7 @@ function drawPackage(id) {
     <label class="f">Price (KWD)<input type="number" min="0" step="0.001" id="pPr" value="${esc(p.price ?? '')}" ${dis}></label>
     <label class="f">Payment note<input type="text" id="pPn" value="${esc(p.paidNote || '')}" ${dis}></label>
    </div><label class="f">Notes<textarea id="pNo" ${dis}>${esc(p.notes || '')}</textarea></label>
-   ${A ? `<div class="row-end"><button class="btn danger sm" id="pDel">Delete package</button>${p.closed ? '<button class="btn sm" id="pReopen">Reopen</button>' : '<button class="btn sm" id="pClose">Close</button><button class="btn sm" id="pRenew">Renew</button>'}<button class="btn primary sm" id="pSave">Save package</button></div>` : '<p class="small muted" style="margin:0">Only the studio admin can change package details.</p>'}</div>
+   ${A ? `<div class="row-end"><button class="btn danger sm" id="pDel">Delete package</button>${p.closed ? '<button class="btn sm" id="pReopen">Reopen</button>' : '<button class="btn sm" id="pClose">Close</button><button class="btn sm" id="pRenew">Renew</button>'}<button class="btn primary sm" id="pSave">Save package</button></div>` : '<p class="small muted" style="margin:0">Only a super admin can change package details.</p>'}</div>
    <div class="sect"><h3>Weekly times with ${esc(tname(p.teacherId))}</h3><div class="small">${slotsOf(p.teacherId).filter(x => x.studentId === p.studentId).map(x => `${DAYS[x.day]} ${fmtT(x.start)} (${x.dur} min)${x.status === 'tentative' ? ' · not confirmed' : ''}`).join('<br>') || '<span class="muted">Not on the timetable.</span>'}</div>
    <div><button class="btn sm" data-open-stu="${esc(p.studentId)}">Open student</button></div></div>`);
   const ov = $('#overlay');
