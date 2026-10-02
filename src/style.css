@@ -225,3 +225,9 @@ th{letter-spacing:.14em}
 .seg.locked{opacity:.75;position:relative}
 .seg .lockico{display:inline-flex;align-items:center;padding:0 6px;font-size:12px;border-right:1px solid var(--line)}
 .logrow.past{grid-template-columns:118px 150px minmax(0,1fr) 30px;color:var(--ink)}
+/* one-row (15 min) slots: breaks etc. */
+.wk .blk.short{padding:0 8px;justify-content:center;margin-block:2px;border-radius:5px}
+.blk.short .one{display:flex;align-items:baseline;gap:6px;font-size:11px;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.blk.short .one b{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+.blk.short .one .bt{font-size:10px;opacity:.75}
+.blk.blocked.short{background:repeating-linear-gradient(135deg,var(--sunk) 0 6px,transparent 6px 11px)!important;outline:1px solid var(--line);outline-offset:-1px}
