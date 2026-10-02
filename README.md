@@ -1,6 +1,7 @@
 # Studio Desk
 
-Timetable, attendance register, lesson packages and makeups for the music studio.
+Timetable, attendance register, lesson packages and makeups for **Aria Music Academy**.
+Branding (logo, aubergine + gold palette, Marcellus + Jost) comes from `alshamiam/aria-website`.
 Replaces the old "Schedules and attendance" spreadsheet.
 
 - **Frontend:** plain JavaScript + Vite, deployed on Vercel

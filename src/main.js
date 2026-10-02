@@ -154,7 +154,9 @@ function renderAuth() {
   const m = S.authMode;
   const title = S.recovery ? 'Choose a new password' : m === 'signup' ? 'Create your account' : m === 'reset' ? 'Reset your password' : 'Sign in';
   $('#view').innerHTML = `<div class="auth"><form class="card" id="authForm" novalidate>
-    <div style="display:flex;gap:10px;align-items:center"><span class="staff" aria-hidden="true"></span><h2>${title}</h2></div>
+    <img class="logo on-light" src="/brand/aria-gold@2x.png" alt="Aria Music Academy"><img class="logo on-dark" src="/brand/aria-gold@2x.png" alt="" aria-hidden="true">
+    <div class="rule"><i></i></div>
+    <h2>${title}</h2>
     ${S.recovery ? '' : `<label class="f">Email<input type="email" id="aEmail" autocomplete="email" required></label>`}
     ${m === 'reset' && !S.recovery ? '' : `<label class="f">${S.recovery ? 'New password' : 'Password'}<input type="password" id="aPass" autocomplete="${m === 'signin' && !S.recovery ? 'current-password' : 'new-password'}" minlength="8" required></label>`}
     <div id="aMsg" class="small"></div>
@@ -198,10 +200,11 @@ function renderChrome() {
   $('#tabs').hidden = !inApp;
   document.querySelectorAll('#tabs [data-admin]').forEach(b => b.hidden = !isAdmin());
   document.querySelectorAll('#tabs button').forEach(b => { if (b.dataset.tab === S.tab) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
-  $('#brandName').textContent = S.settings.schoolName || 'Studio Desk';
+  $('#brandName').textContent = (S.settings.schoolName || 'Aria Music Academy') + ' Studio Desk';
+  document.title = 'Studio Desk · ' + (S.settings.schoolName || 'Aria Music Academy');
   $('#brandTerm').textContent = inApp ? (S.settings.term || '') : '';
   const w = $('#whoMe'); w.hidden = !S.session;
-  if (S.session) w.innerHTML = `<span>${esc(S.session.user.email)}${S.me ? ' · ' + esc(S.me.role === 'admin' ? 'Super admin' : S.me.role === 'teacher' && myTeacher() ? tname(myTeacher()) : ROLES[S.me.role] || '') : ''}</span><button class="btn sm ghost" id="signOut">Sign out</button>`;
+  if (S.session) w.innerHTML = `<span title="${esc(S.session.user.email)}">${esc(S.me ? (S.me.role === 'admin' ? 'Super admin' : S.me.role === 'teacher' && myTeacher() ? tname(myTeacher()) : S.session.user.email) : S.session.user.email)}</span><button class="btn sm ghost" id="signOut" title="Signed in as ${esc(S.session.user.email)}">Sign out</button>`;
   if (S.session) $('#signOut').onclick = async () => { await sb.rpc('log_event', { p_action: 'SIGN_OUT' }).then(() => {}, () => {}); await sb.auth.signOut(); if (channel) { sb.removeChannel(channel); channel = null; } closeOverlay(); };
 }
 function render() {
@@ -713,7 +716,7 @@ function drawModal() {
     shell('Add teacher', '', `<label class="f">Name<input type="text" id="mN" placeholder="Ms. …"></label><label class="f">Instruments or subjects<input type="text" id="mS"></label><div class="row-end">${cancel}<button class="btn primary" id="mOk">Add teacher</button></div>`, true);
     $('#mOk').onclick = async () => {
       const name = $('#mN').value.trim(); if (!name) return toast('Enter a name'); const id = slug(name) + '-' + rid();
-      const palette = ['#2f6f8f', '#8a4fa3', '#b5562f', '#3d7d4a', '#a07a1c', '#2f7f7a', '#9a3d5f', '#4b5bb0'];
+      const palette = ['#6b3d78', '#a8722a', '#8c3b4a', '#3f6b5a', '#2f5373', '#7a5c2e', '#5a2f5e', '#4a6b7a'];
       backFromModal();
       await run(sb.from('teachers').insert({ id, name, subjects: $('#mS')?.value?.trim() || '', color: palette[Object.keys(S.teachers).length % palette.length], sort_order: Object.keys(S.teachers).length + 1 }), 'Teacher added').catch(() => {});
     };
