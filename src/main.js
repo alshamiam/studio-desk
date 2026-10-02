@@ -63,7 +63,7 @@ async function refreshPhotoUrls() {
   for (const r of data || []) if (r.signedUrl) photoUrls[r.path] = { url: r.signedUrl, exp: now + 3500 * 1000 };
   render();
 }
-const initials = n => String(n || '?').replace(/^(Ms|Mr|Mrs|Dr)\.?\s+/i, '').split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?';
+const initials = n => String(n || '?').replace(/^(Ms|Mr|Mrs|Dr)\.?\s+/i, '').split(/\s+/).map(w => w.replace(/[^\p{L}]/gu, '')).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?';
 function avatar(kind, id, size = 28) {
   const rec = kind === 'teacher' ? S.teachers[id] : S.students[id]; const name = kind === 'teacher' ? tname(id) : sname(id);
   const url = rec?.photo && photoUrls[rec.photo]?.url;
