@@ -48,7 +48,7 @@ const slug = s => (s || 'x').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+
 const rid = () => Math.random().toString(36).slice(2, 7);
 const sname = id => S.students[id]?.name || 'Student';
 const tname = id => S.teachers[id]?.name || 'No teacher';
-const tcolor = id => S.teachers[id]?.color || '#778';
+const tcolor = id => { const c = S.teachers[id]?.color; return /^#[0-9a-fA-F]{6}$/.test(c || '') ? c : '#777788'; };
 const teacherIds = () => Object.keys(S.teachers).sort((a, b) => (S.teachers[a].order ?? 99) - (S.teachers[b].order ?? 99) || tname(a).localeCompare(tname(b)));
 const studentIds = incArch => Object.keys(S.students).filter(id => incArch || !S.students[id].archived).sort((a, b) => sname(a).localeCompare(sname(b)));
 const slotsOf = tid => S.teachers[tid]?.slots || [];
@@ -75,6 +75,10 @@ const pairPkgs = (sid, tid) => pkgList().filter(p => p.studentId === sid && p.te
 function pkgForDate(sid, tid, date) {
   const all = pairPkgs(sid, tid);
   const hit = all.find(p => (p.log || []).some(e => e.d === date)); if (hit) return hit;
+  const covers = p => (!p.start || p.start <= date) && (!p.end || p.end >= date) && (!p.closed || (stats(p).last && stats(p).last >= date));
+  const cov = all.filter(covers).sort((a, b) => (a.start || '').localeCompare(b.start || ''));
+  const covPick = cov.find(p => !p.closed && stats(p).left > 0) || cov.find(p => !p.closed) || cov.at(-1);
+  if (covPick) return covPick;
   const open = all.filter(p => !p.closed).sort((a, b) => (a.start || '').localeCompare(b.start || ''));
   return open.find(p => stats(p).left > 0) || open.at(-1) || null;
 }
@@ -90,7 +94,9 @@ function conflictsFor(tid, slot) {
 }
 
 /* ---------- data: load + realtime ---------- */
+let loadSeq = 0;
 async function loadAll() {
+  const seq = ++loadSeq;
   const q = await Promise.all([
     sb.from('teachers').select('*'), sb.from('students').select('*'), sb.from('packages').select('*'),
     sb.from('lessons').select('id,package_id,lesson_date,status,note'), sb.from('slots').select('*'),
@@ -98,6 +104,7 @@ async function loadAll() {
     isAdmin() ? sb.from('profiles').select('*').order('created_at') : Promise.resolve({ data: [] }),
     isAdmin() ? sb.from('payments').select('*').order('created_at', { ascending: false }) : Promise.resolve({ data: [] }),
   ]);
+  if (seq !== loadSeq) return;
   const bad = q.find(r => r.error); if (bad) { console.error(bad.error); toast('Could not load the studio data. Refresh to try again.'); return; }
   const [t, s, p, l, sl, st, pr, pay] = q.map(r => r.data);
   const teachers = {};
@@ -114,7 +121,7 @@ async function loadAll() {
   render();
 }
 let reloadTimer = null; let channel = null;
-const scheduleReload = () => { clearTimeout(reloadTimer); reloadTimer = setTimeout(() => { loadAll(); if (S.tab === 'history' && isAdmin()) loadHistory(true); if (tl.key && drawer && (drawer.type === 'student' || drawer.type === 'package') && isAdmin()) { const [k, i] = tl.key.split('|'); loadTimeline(k, i); } }, 350); };
+const scheduleReload = () => { clearTimeout(reloadTimer); reloadTimer = setTimeout(() => { loadAll(); if (S.tab === 'history' && isAdmin() && S.hist.rows.length <= 200) loadHistory(true); if (tl.key && drawer && (drawer.type === 'student' || drawer.type === 'package') && isAdmin()) { const [k, i] = tl.key.split('|'); loadTimeline(k, i); } }, 350); };
 function subscribe() {
   if (channel) return;
   channel = sb.channel('studio').on('postgres_changes', { event: '*', schema: 'public' }, scheduleReload).subscribe();
@@ -246,7 +253,7 @@ function attention() {
     for (let i = 14; i >= 1; i--) {
       const d = addDays(today, -i); if (wd(d) !== sl.day) continue;
       const all = pairPkgs(sl.studentId, t); if (!all.length) continue;
-      const started = all.some(p => p.start && p.start <= d && !(p.closed && stats(p).last && stats(p).last < d)); if (!started) continue;
+      const started = all.some(p => p.start && p.start <= d && (!p.end || p.end >= d) && !(p.closed && (!stats(p).last || stats(p).last < d))); if (!started) continue;
       if (all.some(p => entryFor(p, d))) continue;
       unmarked.push({ d, t, sid: sl.studentId, start: sl.start });
     }
@@ -313,7 +320,7 @@ function renderToday() {
 
 /* ---------- WEEK ---------- */
 function renderWeek() {
-  const tids = teacherIds();
+  const tids = isAdmin() ? teacherIds() : teacherIds().filter(x => x === myTeacher());
   if (!S.weekTeacher || !S.teachers[S.weekTeacher]) S.weekTeacher = myTeacher() && S.teachers[myTeacher()] ? myTeacher() : tids[0];
   const t = S.weekTeacher; const slots = slotsOf(t); const editable = canEditSlots(t);
   if (!t) { $('#view').innerHTML = '<div class="card empty">No teachers yet.</div>'; return; }
@@ -497,12 +504,14 @@ function paymentsSect(list, sid, pid) {
 function wirePayments() {
   const ov = $('#overlay');
   ov.querySelectorAll('[data-pay-void]').forEach(b => b.onclick = () => { const x = S.payments.find(y => y.id === b.dataset.payVoid); reasonBox({ title: 'Void payment', msg: `Void the ${kd(x?.amount)} payment from ${sname(x?.student_id)}? It stays on record, crossed out, and stops counting in totals.`, label: 'Reason (required)', required: true, yes: 'Void payment' }, reason => run(sb.from('payments').update({ status: 'void', void_reason: reason }).eq('id', x.id), 'Payment voided')); });
-  ov.querySelectorAll('[data-pay-mark]').forEach(b => b.onclick = () => run(sb.from('payments').update({ status: 'paid', paid_on: kwToday() }).eq('id', b.dataset.payMark), 'Marked as paid').then(() => renderOverlay(true)).catch(() => {}));
+  ov.querySelectorAll('[data-pay-mark]').forEach(b => b.onclick = () => run(sb.from('payments').update({ status: 'paid', paid_on: S.payments.find(y => y.id === b.dataset.payMark)?.paid_on || kwToday() }).eq('id', b.dataset.payMark), 'Marked as paid').then(() => renderOverlay(true)).catch(() => {}));
   const add = $('#payAdd'); if (!add) return;
   add.onclick = () => {
+    if (add.disabled) return;
     const amount = Number($('#payAmt').value); if (!(amount > 0)) return toast('Enter the amount');
+    add.disabled = true;
     const row = { student_id: add.dataset.sid, package_id: add.dataset.pid || null, amount, method: $('#payMethod').value.trim(), kind: $('#payKind').value, status: $('#payStatus').value, paid_on: $('#payOn').value || null, note: $('#payNote').value.trim() };
-    run(sb.from('payments').insert(row), 'Payment recorded').then(() => renderOverlay(true)).catch(() => {});
+    run(sb.from('payments').insert(row), 'Payment recorded').then(() => renderOverlay(true)).catch(() => {}).finally(() => { add.disabled = false; });
   };
 }
 function renderPayments() {
@@ -774,7 +783,9 @@ function drawPackage(id) {
   wirePayments();
   const ov = $('#overlay');
   ov.querySelectorAll('[data-correct]').forEach(b => b.onclick = () => openModal('correct', { pid: id, lessonId: b.dataset.correct }));
-  ov.querySelectorAll('[data-lg]').forEach(el => el.onchange = () => { const [lid, col] = el.dataset.lg.split('|'); if (col === 'lesson_date' && !el.value) return; run(sb.from('lessons').update({ [col]: el.value }).eq('id', lid)).then(() => renderOverlay(true)).catch(() => {}); });
+  ov.querySelectorAll('[data-lg]').forEach(el => el.onchange = () => { const [lid, col] = el.dataset.lg.split('|'); if (col === 'lesson_date' && !el.value) return;
+    if (col === 'lesson_date' && isPast(el.value)) { if (!isAdmin()) { toast('Past attendance is locked. Ask a super admin to correct it.'); renderOverlay(true); return; } return openModal('correct', { pid: id, lessonId: lid, date: el.value }); }
+    run(sb.from('lessons').update({ [col]: el.value }).eq('id', lid)).then(() => renderOverlay(true)).catch(() => {}); });
   ov.querySelectorAll('[data-lgdel]').forEach(b => b.onclick = () => { const e = (p.log || []).find(x => x.id === b.dataset.lgdel); confirmBox(`Remove the "${ST[e?.s]?.label || ''}" mark on ${fmtD(e?.d)}? This is recorded in History.`, () => run(sb.from('lessons').delete().eq('id', b.dataset.lgdel), 'Mark removed'), 'Remove mark'); });
   $('#nlAdd').onclick = () => { const d = $('#nlD').value; if (!d) return toast('Pick a date'); if (entryFor(p, d)) return toast('A lesson is already logged on that date'); run(sb.from('lessons').insert({ package_id: id, lesson_date: d, status: $('#nlS').value, note: $('#nlN').value.trim() }), 'Lesson added').then(() => renderOverlay(true)).catch(() => {}); };
   if (!A) return;
@@ -823,7 +834,7 @@ function drawModal() {
     const p = S.packages[ctx.pid]; const e = (p?.log || []).find(x => x.id === ctx.lessonId); if (!e) { backFromModal(); return; }
     const opts2 = Object.entries(ST).map(([k, v]) => `<option value="${k}" ${(ctx.status || e.s) === k ? 'selected' : ''}>${esc(v.label)}</option>`).join('');
     shell('Correct past attendance', '', `<p style="margin:0">${esc(sname(p.studentId))} · ${esc(tname(p.teacherId))} · ${esc(fmtD(e.d, { weekday: 'long', day: 'numeric', month: 'long' }))}<br><span class="small muted">Currently: ${esc(ST[e.s]?.label || e.s)}${e.n ? ' · ' + esc(e.n) : ''}</span></p>
-     <div class="grid2"><label class="f">Date<input type="date" id="cD" value="${esc(e.d)}"></label><label class="f">Status<select id="cS">${opts2}</select></label></div>
+     <div class="grid2"><label class="f">Date<input type="date" id="cD" value="${esc(ctx.date || e.d)}"></label><label class="f">Status<select id="cS">${opts2}</select></label></div>
      <label class="f">Note<input type="text" id="cN" value="${esc(e.n || '')}"></label>
      <label class="f">Reason for the correction (required)<textarea id="cR" style="min-height:70px" placeholder="e.g. Marked the wrong student by mistake"></textarea></label>
      <div class="row-end"><button class="btn danger" id="cDel" style="margin-right:auto">Remove this mark</button>${cancel}<button class="btn primary" id="cOk">Save correction</button></div>`, true);
@@ -840,8 +851,8 @@ function drawModal() {
     $('#mOk').onclick = async () => {
       const name = $('#mN').value.trim(); if (!name) return toast('Enter a name');
       if (studentIds(true).some(id => sname(id).toLowerCase() === name.toLowerCase())) return toast('A student with that name already exists');
-      const id = slug(name) + '-' + rid();
-      try { await run(sb.from('students').insert({ id, name, guardian: $('#mG').value.trim(), phone: $('#mP').value.trim(), reg_form: $('#mF').value }), 'Student added'); modal = null; openDrawer('student', id); } catch (e) { /* toast shown */ }
+      const id = slug(name) + '-' + rid(); const btn = $('#mOk'); if (btn.disabled) return; btn.disabled = true;
+      try { await run(sb.from('students').insert({ id, name, guardian: $('#mG').value.trim(), phone: $('#mP').value.trim(), reg_form: $('#mF').value }), 'Student added'); modal = null; openDrawer('student', id); } catch (e) { btn.disabled = false; }
     };
   } else if (kind === 'newteacher') {
     shell('Add teacher', '', `<label class="f">Name<input type="text" id="mN" placeholder="Ms. …"></label><label class="f">Instruments or subjects<input type="text" id="mS"></label><div class="row-end">${cancel}<button class="btn primary" id="mOk">Add teacher</button></div>`, true);
@@ -871,16 +882,20 @@ function drawModal() {
     $('#mK').onchange = sync; $('#mW').onchange = sync;
     $('#mOk').onclick = async () => {
       const sid = old ? old.studentId : $('#mSt').value; if (!sid) return toast('Choose a student'); const tid = $('#mT').value; if (!tid) return toast('Add a teacher first');
+      const btn = $('#mOk'); if (btn.disabled) return; btn.disabled = true;
       const id = `${tid}--${sid}--${Date.now().toString(36)}`;
       const row = { id, renewed_from: old ? ctx.renewOf : null, student_id: sid, teacher_id: tid, subject: old?.subject || '', kind: $('#mK').value, sessions: Math.max(1, +$('#mNn').value || 1), per_week: Math.max(1, Math.min(7, +$('#mW').value || 1)), start_date: $('#mS').value || kwToday(), end_date: $('#mE').value || null, term: $('#mTerm').value.trim(), payment: $('#mP').value, price: $('#mPr').value === '' ? null : +$('#mPr').value, notes: old && os.owed ? `${os.owed} makeup(s) still owed from the previous package.` : '' };
       try {
-        await run(sb.from('packages').insert(row));
         if (old) {
-          if (os.used > os.total) { const counted = (old.log || []).filter(e => ST[e.s]?.counts); const extra = counted.slice(os.total).map(e => e.id); await run(sb.from('lessons').update({ package_id: id }).in('id', extra)); }
-          await run(sb.from('packages').update({ closed: true }).eq('id', ctx.renewOf));
+          // Overrun lessons move to the new package. Makeups stay with the package whose debt they cleared.
+          const counted = (old.log || []).filter(e => ST[e.s]?.counts);
+          const extra = os.used > os.total ? counted.slice(os.total).filter(e => e.s !== 'makeup').map(e => e.id) : [];
+          await run(sb.rpc('renew_package', { p_old: ctx.renewOf, p_new: row, p_move: extra }));
+        } else {
+          await run(sb.from('packages').insert(row));
         }
         toast(old ? 'Package renewed' : 'Package created'); modal = null; openDrawer('package', id);
-      } catch (e) { /* toast shown */ }
+      } catch (e) { btn.disabled = false; }
     };
   } else if (kind === 'extra') {
     const only = isAdmin() ? null : myTeacher();
@@ -955,24 +970,31 @@ document.addEventListener('click', async e => {
 
 /* ---------- export ---------- */
 async function exportXlsx() {
+  try { await exportXlsxInner(); } catch (e) { console.error(e); toast('Export failed. Please try again.'); }
+}
+const STATE_LABEL = { active: 'Active', low: 'Nearly done', finished: 'Finished', closed: 'Closed' };
+async function exportXlsxInner() {
   const X = await import('xlsx');
+  const used = new Set();
+  const sheetName = n => { let base = String(n || '').replace(/[\\/?*[\]:]/g, '').trim().slice(0, 28) || 'Sheet'; let name = base, i = 2; while (used.has(name.toLowerCase())) name = `${base} (${i++})`; used.add(name.toLowerCase()); return name; };
+  ['Attendance', 'Students', 'Payments'].forEach(n => used.add(n.toLowerCase()));
   const wb = X.utils.book_new();
   const att = [['Teacher', 'Student', 'Subject', 'Type', 'Term', 'Start', 'End', 'Lessons', 'Used', 'Left', 'Makeups owed', 'Payment', 'Status', 'Lessons logged']];
   for (const p of pkgList().sort((a, b) => tname(a.teacherId).localeCompare(tname(b.teacherId)) || sname(a.studentId).localeCompare(sname(b.studentId)))) {
     const s = stats(p);
-    att.push([tname(p.teacherId), sname(p.studentId), p.subject || '', KINDS[p.kind] || p.kind, p.term || '', p.start || '', p.end || '', s.total, s.used, s.left, s.owed, PAY[p.payment]?.[0] || '', p.closed ? 'Closed' : s.state, ...(p.log || []).map(e => `${e.d}${e.s === 'present' ? '' : ' (' + (ST[e.s]?.seg || e.s) + ')'}`)]);
+    att.push([tname(p.teacherId), sname(p.studentId), p.subject || '', KINDS[p.kind] || p.kind, p.term || '', p.start || '', p.end || '', s.total, s.used, s.left, s.owed, PAY[p.payment]?.[0] || '', p.closed ? 'Closed' : (STATE_LABEL[s.state] || s.state) + (s.ended ? ' (end date passed)' : ''), ...(p.log || []).map(e => `${e.d}${e.s === 'present' ? '' : ' (' + (ST[e.s]?.seg || e.s) + ')'}`)]);
   }
   X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(att), 'Attendance');
   for (const t of teacherIds()) {
     const sl = slotsOf(t); if (!sl.length) continue; const times = [...new Set(sl.map(s => s.start))].sort(); const days = [0, 1, 2, 3, 4, 5, 6].filter(d => sl.some(s => s.day === d));
     const rows = [['Time', ...days.map(d => DAYS[d])], ...times.map(tm => [fmtT(tm), ...days.map(d => { const s = sl.find(x => x.day === d && x.start === tm); return s ? slotLabel(s) + (s.status === 'tentative' ? ' (not confirmed)' : '') : ''; })])];
-    X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(rows), tname(t).replace(/[\\/?*[\]:]/g, '').slice(0, 31));
+    X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(rows), sheetName(tname(t)));
   }
   const st = [['Student', 'Parent / Guardian', 'Phone', 'Registration form', 'Notes', 'Archived']];
   for (const id of studentIds(true)) { const s = S.students[id]; st.push([s.name, s.guardian || '', s.phone || '', FORM[s.regForm]?.[0] || '', s.notes || '', s.archived ? 'Yes' : '']); }
   X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(st), 'Students');
-  const pays = [['Student', 'Teacher', 'Amount (KD)', 'For', 'Method', 'Status', 'Paid on', 'Note']];
-  for (const x of S.payments) pays.push([sname(x.student_id), x.package_id ? tname(S.packages[x.package_id]?.teacherId) : '', Number(x.amount), PKIND[x.kind] || x.kind, x.method || '', x.status, x.paid_on || '', x.note || '']);
+  const pays = [['Student', 'Teacher', 'Amount (KD)', 'For', 'Method', 'Status', 'Paid on', 'Note', 'Void reason']];
+  for (const x of S.payments) pays.push([sname(x.student_id), x.package_id ? tname(S.packages[x.package_id]?.teacherId) : '', x.status === 'void' ? 0 : Number(x.amount), PKIND[x.kind] || x.kind, x.method || '', ({ paid: 'Paid', pending: 'Pending', void: `Voided (was ${x.amount} KD)` })[x.status] || x.status, x.paid_on || '', x.note || '', x.void_reason || '']);
   X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(pays), 'Payments');
   X.writeFile(wb, `studio-${kwToday()}.xlsx`);
   sb.rpc('log_event', { p_action: 'EXPORT', p_detail: { file: `studio-${kwToday()}.xlsx`, packages: pkgList().length } }).then(() => {}, () => {});
