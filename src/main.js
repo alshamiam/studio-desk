@@ -400,11 +400,11 @@ function renderStudents() {
   $('#view').innerHTML = `
   <div class="bar"><h2>Students</h2>${isAdmin() ? '<button class="btn primary" id="newStu">Add student</button>' : ''}</div>
   <div class="filters" style="margin-bottom:12px">
-   <input type="search" id="sq" placeholder="Search name, guardian, phone" value="${esc(f.q)}" aria-label="Search students">
+   <input type="search" id="sq" placeholder="Search name, parent / guardian, phone" value="${esc(f.q)}" aria-label="Search students">
    <select id="st" aria-label="Teacher"><option value="all">All teachers</option>${teacherIds().map(id => `<option value="${esc(id)}" ${f.teacher === id ? 'selected' : ''}>${esc(tname(id))}</option>`).join('')}</select>
    <select id="sf" aria-label="Form"><option value="all">Any form status</option>${Object.entries(FORM).map(([k, v]) => `<option value="${k}" ${f.form === k ? 'selected' : ''}>${v[0]}</option>`).join('')}<option value="archived" ${f.form === 'archived' ? 'selected' : ''}>Archived students</option></select>
    <span class="muted small">${ids.length} student${ids.length === 1 ? '' : 's'}</span></div>
-  <div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Guardian</th><th>Phone</th><th>Registration form</th><th>Teachers</th><th>Weekly times</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">No students match.</td></tr>'}</tbody></table></div>`;
+  <div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Parent / Guardian</th><th>Phone</th><th>Registration form</th><th>Teachers</th><th>Weekly times</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">No students match.</td></tr>'}</tbody></table></div>`;
   $('#sq').oninput = e => { f.q = e.target.value; const pos = e.target.selectionStart; render(); const el = $('#sq'); el.focus(); el.setSelectionRange(pos, pos); };
   $('#st').onchange = e => { f.teacher = e.target.value; render(); };
   $('#sf').onchange = e => { f.form = e.target.value; render(); };
@@ -531,7 +531,7 @@ const AREAS = { all: 'Everything', lessons: 'Attendance', packages: 'Packages', 
 const FIELD = {
   lesson_date: 'Date', status: 'Status', note: 'Note', package_id: 'Package', sessions: 'Lessons in package', per_week: 'Lessons per week', start_date: 'Start date',
   term: 'Term', payment: 'Payment', paid_note: 'Payment note', price: 'Price (KWD)', notes: 'Notes', closed: 'Closed', kind: 'Type', subject: 'Subject',
-  teacher_id: 'Teacher', student_id: 'Student', name: 'Name', guardian: 'Guardian', phone: 'Phone', reg_form: 'Registration form', archived: 'Archived',
+  teacher_id: 'Teacher', student_id: 'Student', name: 'Name', guardian: 'Parent / Guardian', phone: 'Phone', reg_form: 'Registration form', archived: 'Archived',
   day: 'Day', start_time: 'Start', dur: 'Length (min)', label: 'Label', subjects: 'Subjects', color: 'Colour', sort_order: 'Order', school_name: 'Studio name',
   low_threshold: 'Warning level', role: 'Access', email: 'Email', end_date: 'End date', amount: 'Amount (KWD)', method: 'Method', paid_on: 'Paid on',
 };
@@ -758,7 +758,7 @@ function drawStudent(id) {
   shell(s.name, s.archived ? 'Archived' : '', `
    <div class="grid2">
     <label class="f">Name<input type="text" id="sN" value="${esc(s.name)}" ${dis}></label>
-    <label class="f">Guardian<input type="text" id="sG" value="${esc(s.guardian || '')}" ${dis}></label>
+    <label class="f">Parent / Guardian<input type="text" id="sG" value="${esc(s.guardian || '')}" ${dis}></label>
     <label class="f">Phone<input type="tel" id="sP" value="${esc(s.phone || '')}" ${dis}></label>
     <label class="f">Registration form<select id="sF" ${dis}>${Object.entries(FORM).map(([k, v]) => `<option value="${k}" ${s.regForm === k ? 'selected' : ''}>${v[0]}</option>`).join('')}</select></label>
    </div><label class="f">Notes<textarea id="sNo" ${dis}>${esc(s.notes || '')}</textarea></label>
@@ -787,7 +787,7 @@ function drawModal() {
     shell('Please confirm', '', `<p style="margin:0">${esc(ctx.msg)}</p><div class="row-end">${ctx.onYes ? cancel + `<button class="btn primary" id="mYes">${esc(ctx.yesLabel || 'Confirm')}</button>` : '<button class="btn primary" data-mcancel>OK</button>'}</div>`, true);
     if (ctx.onYes) $('#mYes').onclick = async () => { const f = ctx.onYes; backFromModal(); try { await f(); } catch (e) { /* toast shown */ } };
   } else if (kind === 'newstu') {
-    shell('Add student', '', `<div class="grid2"><label class="f">Name<input type="text" id="mN"></label><label class="f">Guardian<input type="text" id="mG"></label><label class="f">Phone<input type="tel" id="mP"></label><label class="f">Registration form<select id="mF">${Object.entries(FORM).map(([k, v]) => `<option value="${k}">${v[0]}</option>`).join('')}</select></label></div><div class="row-end">${cancel}<button class="btn primary" id="mOk">Add student</button></div>`, true);
+    shell('Add student', '', `<div class="grid2"><label class="f">Name<input type="text" id="mN"></label><label class="f">Parent / Guardian<input type="text" id="mG"></label><label class="f">Phone<input type="tel" id="mP"></label><label class="f">Registration form<select id="mF">${Object.entries(FORM).map(([k, v]) => `<option value="${k}">${v[0]}</option>`).join('')}</select></label></div><div class="row-end">${cancel}<button class="btn primary" id="mOk">Add student</button></div>`, true);
     $('#mOk').onclick = async () => {
       const name = $('#mN').value.trim(); if (!name) return toast('Enter a name');
       if (studentIds(true).some(id => sname(id).toLowerCase() === name.toLowerCase())) return toast('A student with that name already exists');
@@ -918,7 +918,7 @@ async function exportXlsx() {
     const rows = [['Time', ...days.map(d => DAYS[d])], ...times.map(tm => [fmtT(tm), ...days.map(d => { const s = sl.find(x => x.day === d && x.start === tm); return s ? slotLabel(s) + (s.status === 'tentative' ? ' (not confirmed)' : '') : ''; })])];
     X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(rows), tname(t).replace(/[\\/?*[\]:]/g, '').slice(0, 31));
   }
-  const st = [['Student', 'Guardian', 'Phone', 'Registration form', 'Notes', 'Archived']];
+  const st = [['Student', 'Parent / Guardian', 'Phone', 'Registration form', 'Notes', 'Archived']];
   for (const id of studentIds(true)) { const s = S.students[id]; st.push([s.name, s.guardian || '', s.phone || '', FORM[s.regForm]?.[0] || '', s.notes || '', s.archived ? 'Yes' : '']); }
   X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(st), 'Students');
   const pays = [['Student', 'Teacher', 'Amount (KD)', 'For', 'Method', 'Status', 'Paid on', 'Note']];
