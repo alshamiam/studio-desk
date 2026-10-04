@@ -207,7 +207,7 @@ async function loadAll() {
   for (const r of l) packages[r.package_id]?.log.push({ id: r.id, d: r.lesson_date, s: r.status, n: r.note, t: r.start_time || null, du: r.dur || null });
   for (const k in packages) packages[k].log.sort((a, b) => a.d.localeCompare(b.d));
   Object.assign(S, { teachers, students, packages, profiles: pr || [], payments: pay || [], loaded: true });
-  if (st) S.settings = { schoolName: st.school_name, term: st.term, lowThreshold: st.low_threshold };
+  if (st) S.settings = { schoolName: st.school_name, term: st.term, lowThreshold: st.low_threshold, phone: st.phone || '', instagram: st.instagram || '' };
   render();
   refreshPhotoUrls();
 }
@@ -560,6 +560,8 @@ function renderSetup() {
     <label class="f">Studio name<input type="text" id="setName" value="${esc(st.schoolName || '')}"></label>
     <label class="f">Current term<input type="text" id="setTerm" value="${esc(st.term || '')}"></label>
     <label class="f">Warn when this many lessons are left<input type="number" min="0" max="10" id="setLow" value="${esc(st.lowThreshold ?? 2)}"></label>
+    <label class="f">Studio phone <span class="muted small">(on parent reports and receipts)</span><input type="tel" id="setPhone" placeholder="+965 …" value="${esc(st.phone || '')}"></label>
+    <label class="f">Instagram <span class="muted small">(on parent reports and receipts)</span><input type="text" id="setIg" placeholder="ariamusicacademy.kw" value="${esc(st.instagram || '')}"></label>
   </div><div class="row-end" style="margin-top:12px"><button class="btn primary" id="saveSet">Save settings</button></div></section>
   <div class="bar"><h2 style="font-size:20px">Teachers</h2><button class="btn" id="addT">Add teacher</button></div>
   <div class="teachers-list">${teacherIds().map(id => {
@@ -577,7 +579,7 @@ function renderSetup() {
    <p><b>Left</b> = package size minus lessons used. A package shows as nearly done at the warning level above and finished at zero.</p>
    <p>Renewing a package closes the old one and starts a new one, so history is kept.</p>
   </div></section>`;
-  $('#saveSet').onclick = () => run(sb.from('settings').upsert({ id: 1, school_name: $('#setName').value.trim() || 'Studio Desk', term: $('#setTerm').value.trim(), low_threshold: Math.max(0, +$('#setLow').value || 0) }), 'Settings saved').catch(() => {});
+  $('#saveSet').onclick = () => run(sb.from('settings').upsert({ id: 1, school_name: $('#setName').value.trim() || 'Studio Desk', term: $('#setTerm').value.trim(), low_threshold: Math.max(0, +$('#setLow').value || 0), phone: $('#setPhone').value.trim(), instagram: igHandle($('#setIg').value) }), 'Settings saved').catch(() => {});
   $('#addT').onclick = () => openModal('newteacher', {});
   $('#exportX').onclick = exportXlsx;
   document.querySelectorAll('[data-save-t]').forEach(b => b.onclick = () => {
@@ -599,6 +601,9 @@ function renderSetup() {
 /* ---------- PAYMENTS ---------- */
 const PKIND = { package: 'Package', book: 'Book', trial: 'Trial lesson', single: 'Single session', other: 'Other' };
 const METHODS = ['Company account (link)', 'KNET machine', 'Paid to Ms. Chaimaa', 'Paid to Ms. Nilufar', 'Cash', 'Bank transfer'];
+// Accepts "@name", "name" or an instagram.com link; stores just the handle.
+const igHandle = v => String(v || '').trim().replace(/^https?:\/\/(www\.)?instagram\.com\//i, '').replace(/[/?#].*$/, '').replace(/^@/, '');
+const contactLine = () => [S.settings.phone ? `Call / WhatsApp ${S.settings.phone}` : '', S.settings.instagram ? `Instagram @${igHandle(S.settings.instagram)}` : ''].filter(Boolean).join('  ·  ');
 const rcptNo = x => x?.receipt_no ? 'R-' + String(x.receipt_no).padStart(5, '0') : '';
 const fmtLong = d => fmtD(d, { day: 'numeric', month: 'long', year: 'numeric' });
 // Plain-text receipt for pasting into WhatsApp or an email.
@@ -606,7 +611,7 @@ function receiptText(x) {
   const p = S.packages[x.package_id]; const st = x.status === 'paid' ? 'Paid' : x.status === 'void' ? 'VOIDED' : 'Pending';
   return [`${S.settings.schoolName || 'Aria Music Academy'} · Payment receipt ${rcptNo(x)}`, `Student: ${sname(x.student_id)}`,
     p ? `Package: ${pkgRef(p)} · ${tname(p.teacherId)} · ${KINDS[p.kind] || p.kind}${p.term ? ' · ' + p.term : ''} (${p.sessions} lessons)` : `For: ${PKIND[x.kind] || x.kind}`,
-    `Amount: ${kd(x.amount)} · ${st}${x.method ? ' · ' + x.method : ''}`, `Date: ${fmtLong(x.paid_on || String(x.created_at || '').slice(0, 10) || kwToday())}`, x.note ? `Note: ${x.note}` : ''].filter(Boolean).join('\n');
+    `Amount: ${kd(x.amount)} · ${st}${x.method ? ' · ' + x.method : ''}`, `Date: ${fmtLong(x.paid_on || String(x.created_at || '').slice(0, 10) || kwToday())}`, x.note ? `Note: ${x.note}` : '', contactLine()].filter(Boolean).join('\n');
 }
 const kd = n => `${Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 3 })} KD`;
 // Packages a student's payment can belong to (which is what ties it to a teacher), open ones first.
@@ -679,7 +684,7 @@ const FIELD = {
   term: 'Term', payment: 'Payment', paid_note: 'Payment note', price: 'Price (KWD)', notes: 'Notes', closed: 'Closed', kind: 'Type', subject: 'Subject',
   teacher_id: 'Teacher', student_id: 'Student', name: 'Name', guardian: 'Parent / Guardian', phone: 'Phone', reg_form: 'Registration form', archived: 'Archived',
   day: 'Day', start_time: 'Start', dur: 'Length (min)', label: 'Label', subjects: 'Subjects', color: 'Colour', sort_order: 'Order', school_name: 'Studio name',
-  low_threshold: 'Warning level', void_reason: 'Void reason', renewed_from: 'Renewed from', ref: 'Reference', role: 'Access', email: 'Email', end_date: 'End date', amount: 'Amount (KWD)', method: 'Method', paid_on: 'Paid on',
+  low_threshold: 'Warning level', instagram: 'Instagram', void_reason: 'Void reason', renewed_from: 'Renewed from', ref: 'Reference', role: 'Access', email: 'Email', end_date: 'End date', amount: 'Amount (KWD)', method: 'Method', paid_on: 'Paid on',
 };
 const HIDDEN_FIELDS = new Set(['id', 'created_at', 'created_by', 'user_id']);
 const pkgMemo = {};
@@ -902,6 +907,10 @@ function reportPkgHtml(p) {
     ${log.length ? `<table class="rtab"><thead><tr><th>#</th><th>Date</th><th>Time</th><th>What happened</th><th>Package</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="rempty">No lessons recorded yet.</p>'}
   </section>`;
 }
+function contactHtml() {
+  const ph = S.settings.phone, ig = igHandle(S.settings.instagram); if (!ph && !ig) return '';
+  return `<div class="rcontact">${ph ? `<span><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1A17 17 0 0 1 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1l-2.3 2.2Z"/></svg>${esc(ph)}</span>` : ''}${ig ? `<span><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 7.3A4.7 4.7 0 1 0 16.7 12 4.7 4.7 0 0 0 12 7.3Zm0 7.8a3.1 3.1 0 1 1 3.1-3.1 3.1 3.1 0 0 1-3.1 3.1Zm6-8a1.1 1.1 0 1 1-1.1-1.1A1.1 1.1 0 0 1 18 7.1ZM21.1 8.2a5.4 5.4 0 0 0-1.5-3.8 5.4 5.4 0 0 0-3.8-1.5C14.3 2.8 9.7 2.8 8.2 2.9a5.4 5.4 0 0 0-3.8 1.5 5.4 5.4 0 0 0-1.5 3.8c-.1 1.5-.1 6.1 0 7.6a5.4 5.4 0 0 0 1.5 3.8 5.4 5.4 0 0 0 3.8 1.5c1.5.1 6.1.1 7.6 0a5.4 5.4 0 0 0 3.8-1.5 5.4 5.4 0 0 0 1.5-3.8c.1-1.5.1-6.1 0-7.6Zm-2 9.2a3.1 3.1 0 0 1-1.8 1.8c-1.2.5-4.1.4-5.3.4s-4.1.1-5.3-.4a3.1 3.1 0 0 1-1.8-1.8c-.5-1.2-.4-4.1-.4-5.4s-.1-4.1.4-5.3a3.1 3.1 0 0 1 1.8-1.8c1.2-.5 4.1-.4 5.3-.4s4.1-.1 5.3.4a3.1 3.1 0 0 1 1.8 1.8c.5 1.2.4 4.1.4 5.3s.1 4.2-.4 5.4Z"/></svg>@${esc(ig)}</span>` : ''}</div>`;
+}
 function reportHtml(sid, pkgIds) {
   const stu = S.students[sid]; const school = S.settings.schoolName || 'Aria Music Academy';
   const pks = pkgIds.map(id => ({ id, ...S.packages[id] })).filter(p => p.studentId);
@@ -911,7 +920,7 @@ function reportHtml(sid, pkgIds) {
     ${pks.map(reportPkgHtml).join('') || '<p class="rempty">No packages to show.</p>'}
     <div class="rkey"><div class="rlabel">What each mark means</div><div class="rkeys">${Object.values(PARENT_ST).map(([l, c, d]) => `<div><span class="rb ${c}">${esc(l)}</span> ${esc(d)}</div>`).join('')}</div>
       <p>A makeup is owed when a lesson is missed with notice or cancelled by the teacher. Makeup lessons replace those lessons and then count towards the package.</p>
-      <div class="rthanks">Thank you for learning with ${esc(school)}</div></div></div>`;
+      <div class="rthanks">Thank you for learning with ${esc(school)}</div>${contactHtml()}</div></div>`;
 }
 async function downloadReport(sid, name) {
   const el = $('#areport'); if (!el) return; const btn = $('#rDl'); if (btn) { btn.disabled = true; btn.textContent = 'Making PDF…'; }
@@ -924,7 +933,7 @@ async function downloadReport(sid, name) {
         // html2pdf can leave an empty last page; keep only the pages the content actually fills.
         const pagePx = Math.floor(canvas.width * size.inner.height / size.inner.width); const need = Math.max(1, Math.ceil((canvas.height - 36) / pagePx)); // the last 18px is the report's bottom margin
         while (pdf.internal.getNumberOfPages() > need) pdf.deletePage(pdf.internal.getNumberOfPages());
-        const n = pdf.internal.getNumberOfPages(); for (let i = 1; i <= n; i++) { pdf.setPage(i); pdf.setFontSize(8); pdf.setTextColor(120, 100, 110); pdf.setDrawColor(201, 162, 63); pdf.setLineWidth(0.4); pdf.line(12, 287, 198, 287); pdf.text(`${S.settings.schoolName || 'Aria Music Academy'} · ${sname(sid)} · Attendance report`, 12, 292); pdf.text(`Page ${i} of ${n}`, 198, 292, { align: 'right' }); } }).save();
+        const n = pdf.internal.getNumberOfPages(); for (let i = 1; i <= n; i++) { pdf.setPage(i); pdf.setFontSize(8); pdf.setTextColor(120, 100, 110); pdf.setDrawColor(201, 162, 63); pdf.setLineWidth(0.4); pdf.line(12, 287, 198, 287); pdf.text([S.settings.schoolName || 'Aria Music Academy', contactLine()].filter(Boolean).join('  ·  '), 12, 292); pdf.text(`Page ${i} of ${n}`, 198, 292, { align: 'right' }); } }).save();
     sb.rpc('log_event', { p_action: 'EXPORT', p_detail: { file: name, student_id: sid } }).then(() => {}, () => {});
   } catch (e) { console.error(e); toast('Could not make the PDF. Try Print → Save as PDF instead.'); }
   finally { if (btn) { btn.disabled = false; btn.textContent = 'Download PDF'; } }
@@ -1059,7 +1068,7 @@ function drawModal() {
       ${row('For', esc(PKIND[x.kind] || x.kind))}
       ${p ? row('Package ref', `<span class="ref">${esc(pkgRef(p))}</span>`) + row('Teacher', esc(tname(p.teacherId))) + row('Package', esc(`${KINDS[p.kind] || p.kind}${p.subject ? ' · ' + p.subject : ''}${p.term ? ' · ' + p.term : ''}`)) + row('Lessons', esc(`${p.sessions} lessons · ${p.perWeek || 1}× a week`)) + row('Dates', esc(p.start || p.end ? `${p.start ? fmtLong(p.start) : ''} → ${p.end ? fmtLong(p.end) : 'no end date'}` : '')) : ''}
       ${row('Method', esc(x.method || ''))}${row('Note', esc(x.note || ''))}${x.status === 'void' ? row('Voided', esc(x.void_reason || '')) : ''}
-      <div class="rfoot small muted">${esc(S.settings.schoolName || 'Aria Music Academy')} · Issued ${esc(fmtLong(kwToday()))}</div></div>
+      <div class="rfoot small muted">${esc(S.settings.schoolName || 'Aria Music Academy')} · Issued ${esc(fmtLong(kwToday()))}${contactLine() ? `<br>${esc(contactLine())}` : ''}</div></div>
      <div class="row-end">${cancel.replace('Cancel', 'Close')}<button class="btn" id="rCopy">Copy for WhatsApp</button><button class="btn primary" id="rPrint">Print or save PDF</button></div>`, true);
     $('#rPrint').onclick = () => window.print();
     $('#rCopy').onclick = async () => { try { await navigator.clipboard.writeText(receiptText(x)); toast('Receipt copied. Paste it into WhatsApp.'); } catch { toast('Could not copy. Select the receipt text instead.'); } };
