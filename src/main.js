@@ -909,13 +909,32 @@ function drawPackage(id) {
   if ($('#pReopen')) $('#pReopen').onclick = () => reasonBox({ title: 'Reopen package', msg: 'Reopen this package so lessons can be marked on it again?', label: 'Reason (optional)', yes: 'Reopen' }, reason => savePkg(id, { closed: false, notes: [p.notes, stamp('Reopened') + (reason ? ': ' + reason : '')].filter(Boolean).join('\n') }, 'Package reopened'));
   if ($('#pRenew')) $('#pRenew').onclick = () => openModal('newpkg', { studentId: p.studentId, teacherId: p.teacherId, renewOf: id });
 }
+// At-a-glance summary of what a student takes: per teacher, the package type, lessons a week, length, days and times.
+function studentSummary(id) {
+  const today = kwToday(); const sl = studentSlots(id);
+  const open = pkgList().filter(p => p.studentId === id && !p.closed).sort((a, b) => tname(a.teacherId).localeCompare(tname(b.teacherId)));
+  const tids = [...new Set(open.map(p => p.teacherId).concat(sl.map(x => x.teacherId)))];
+  if (!tids.length) return '<p class="muted small">No open package and not on the timetable.</p>';
+  const hrs = m => m % 60 ? `${m} min` : m === 60 ? '1 hour' : `${m / 60} hours`;
+  return tids.map(tid => {
+    const ps = open.filter(p => p.teacherId === tid); const ts = sl.filter(x => x.teacherId === tid);
+    const durs = [...new Set(ts.map(x => x.dur))]; const perWeek = ps[0]?.perWeek || ts.length;
+    const head = [ps[0]?.subject, `${perWeek}× a week`, durs.length ? durs.map(hrs).join(' / ') + ' each' : ''].filter(Boolean).join(' · ');
+    const times = ts.length ? ts.map(x => `<li>${DAYS[x.day]} ${fmtTs(x.start)}–${fmtT(toMin(x.start) + x.dur)}${x.status === 'tentative' ? ' <span class="pill warn">not confirmed</span>' : ''}</li>`).join('') : '<li class="muted">No weekly time on the timetable yet</li>';
+    const warn = ps.length && ts.length && ts.length !== perWeek ? `<div class="small" style="color:var(--warn)">The package says ${perWeek}× a week but the timetable has ${ts.length} weekly time${ts.length === 1 ? '' : 's'}.</div>` : '';
+    const pk = ps.map(p => { const st = stats(p); return `<div class="small" style="display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;cursor:pointer" data-open-pkg="${esc(p.id)}"><b>${esc(KINDS[p.kind] || p.kind)} package</b>${p.term ? `<span class="muted">${esc(p.term)}</span>` : ''}<span>${st.total} lessons · ${st.used} used · <b style="color:${st.left <= 0 ? 'var(--bad)' : st.state === 'low' ? 'var(--warn)' : 'inherit'}">${st.left} left</b></span>${st.owed ? `<span class="pill vio">${st.owed} makeup owed</span>` : ''}<span class="pill ${PAY[p.payment]?.[1] || ''}">${esc(PAY[p.payment]?.[0] || p.payment)}</span>${p.start || p.end ? `<span class="muted">${p.start ? esc(fmtD(p.start, { day: 'numeric', month: 'short', year: 'numeric' })) : ''} → ${p.end ? esc(fmtD(p.end, { day: 'numeric', month: 'short', year: 'numeric' })) : 'no end date'}</span>` : ''}</div>`; }).join('') || '<div class="small" style="color:var(--bad)">No open package with this teacher</div>';
+    const upcoming = ps.flatMap(p => (p.log || []).filter(e => e.d >= today && e.s === 'makeup').map(e => `<li>${esc(fmtD(e.d))}${e.t ? ` ${fmtTs(e.t)}–${fmtT(toMin(e.t) + (e.du || defDur(id, tid)))}` : ' (no time set)'}</li>`)).join('');
+    return `<div class="card" style="padding:12px 14px;border-left:4px solid ${esc(tcolor(tid))}"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${avatar('teacher', tid, 24)}<b>${esc(tname(tid))}</b><span class="muted small">${esc(head)}</span></div>
+      <ul class="small" style="margin:6px 0;padding-left:18px">${times}</ul>${warn}${pk}${upcoming ? `<div class="small" style="margin-top:6px"><b>Upcoming makeups</b><ul style="margin:2px 0 0;padding-left:18px">${upcoming}</ul></div>` : ''}</div>`;
+  }).join('');
+}
 function drawStudent(id) {
   const s = S.students[id]; if (!s) { closeOverlay(); return; }
   const A = isAdmin(); const dis = A ? '' : 'disabled';
   const pk = pkgList().filter(p => p.studentId === id).sort((a, b) => (a.closed - b.closed) || (b.start || '').localeCompare(a.start || ''));
-  const sl = studentSlots(id);
   shell(s.name, s.archived ? 'Archived' : '', `
    ${photoBlock('student', id)}
+   <div class="sect"><h3>Lessons</h3>${studentSummary(id)}</div>
    <div class="grid2">
     <label class="f">Name<input type="text" id="sN" value="${esc(s.name)}" ${dis}></label>
     <label class="f">Parent / Guardian<input type="text" id="sG" value="${esc(s.guardian || '')}" ${dis}></label>
@@ -923,9 +942,8 @@ function drawStudent(id) {
     <label class="f">Registration form<select id="sF" ${dis}>${Object.entries(FORM).map(([k, v]) => `<option value="${k}" ${s.regForm === k ? 'selected' : ''}>${v[0]}</option>`).join('')}</select></label>
    </div><label class="f">Notes<textarea id="sNo" ${dis}>${esc(s.notes || '')}</textarea></label>
    ${A ? `<div class="row-end"><button class="btn sm" id="sArch">${s.archived ? 'Restore' : 'Archive'}</button><button class="btn sm primary" id="sSave">Save student</button></div>` : ''}
-   <div class="sect"><h3>Packages</h3>${pk.map(p => { const st = stats(p); return `<div class="card" style="padding:10px 12px;cursor:pointer" data-open-pkg="${esc(p.id)}"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="dot" style="background:${esc(tcolor(p.teacherId))}"></span><b>${esc(tname(p.teacherId))}</b><span class="muted small">${esc(KINDS[p.kind] || '')} · ${esc(p.term || '')}</span><span style="margin-left:auto" class="pill ${p.closed ? '' : st.state === 'finished' ? 'bad' : st.state === 'low' ? 'warn' : 'ok'}">${p.closed ? 'Closed' : st.left + ' left'}</span></div>${meter(st)}${chips(p)}</div>`; }).join('') || '<p class="muted small">No packages yet.</p>'}
+   <div class="sect"><h3>All packages</h3>${pk.map(p => { const st = stats(p); return `<div class="card" style="padding:10px 12px;cursor:pointer" data-open-pkg="${esc(p.id)}"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="dot" style="background:${esc(tcolor(p.teacherId))}"></span><b>${esc(tname(p.teacherId))}</b><span class="muted small">${esc(KINDS[p.kind] || '')} · ${esc(p.term || '')}</span><span style="margin-left:auto" class="pill ${p.closed ? '' : st.state === 'finished' ? 'bad' : st.state === 'low' ? 'warn' : 'ok'}">${p.closed ? 'Closed' : st.left + ' left'}</span></div>${meter(st)}${chips(p)}</div>`; }).join('') || '<p class="muted small">No packages yet.</p>'}
     ${A ? '<div><button class="btn sm" id="sNewPkg">New package</button></div>' : ''}</div>
-   <div class="sect"><h3>Weekly timetable</h3><div class="small">${sl.map(x => `<span class="dot" style="background:${esc(tcolor(x.teacherId))}"></span> ${DAYS[x.day]} ${fmtT(x.start)} · ${esc(tname(x.teacherId))}${x.status === 'tentative' ? ' · not confirmed' : ''}`).join('<br>') || '<span class="muted">Not on the timetable.</span>'}</div></div>
    ${A ? paymentsSect(S.payments.filter(x => x.student_id === id), id, null) : ''}
    ${A ? timelineSect('student', id) : ''}`);
   if (!A) return;
