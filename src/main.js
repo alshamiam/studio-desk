@@ -111,7 +111,7 @@ function phoneLinks(p, big) {
   const d = intlPhone(p); if (!d) return esc(p || '–');
   return `<span class="phone"><span class="num">${esc(p)}</span><a class="pbtn" href="tel:+${d}" title="Call ${esc(p)}" aria-label="Call ${esc(p)}">📞${big ? ' Call' : ''}</a><a class="pbtn wa" href="https://wa.me/${d}" target="_blank" rel="noopener" title="WhatsApp ${esc(p)}" aria-label="WhatsApp ${esc(p)}"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2Zm4.5-6.1c-.2-.1-1.5-.7-1.7-.8s-.4-.1-.6.1-.7.8-.8 1-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.3-.4.3-.4.7-1.3a.5.5 0 0 0 0-.4l-.8-1.8c-.2-.5-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2 5.2 5.2 0 0 0 1.1 2.8 11.9 11.9 0 0 0 4.6 4 5.2 5.2 0 0 0 3.2.7 2.7 2.7 0 0 0 1.8-1.3 2.2 2.2 0 0 0 .2-1.3c-.1-.1-.3-.2-.5-.3Z"/></svg>${big ? ' WhatsApp' : ''}</a></span>`;
 }
-function toast(msg) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 2800); }
+function toast(msg, ms = 2800) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), ms); }
 
 function stats(p) {
   const log = p.log || []; let used = 0, owes = 0, mk = 0; const c = { present: 0, absent: 0, noshow: 0, cancelled: 0, makeup: 0 };
@@ -149,6 +149,31 @@ function datedLessons(tid, from, to) {
   return out.sort((a, b) => a.e.d.localeCompare(b.e.d) || (a.e.t || '99').localeCompare(b.e.t || '99'));
 }
 const weekOf = d => addDays(d, -wd(d));
+// A weekly lesson is free on a date when its student was marked absent or the teacher cancelled.
+function slotOffOn(tid, s, date) { if (!s.studentId) return null; const e = entryFor(pkgForDate(s.studentId, tid, date), date); return e && !ST[e.s]?.counts ? e : null; }
+// Everything a teacher has on a date: weekly lessons and breaks (unless freed that day) and timed one-off lessons.
+function busyOn(tid, date, skipId) {
+  const w = wd(date); const out = [];
+  for (const s of slotsOf(tid)) if (s.day === w && !slotOffOn(tid, s, date)) out.push({ tid, start: toMin(s.start), end: toMin(s.start) + s.dur, sid: s.studentId, what: s.studentId ? sname(s.studentId) : (s.label || 'Reserved') });
+  for (const x of datedLessons(tid, date, date)) if (x.e.t && x.e.id !== skipId) out.push({ tid, start: toMin(x.e.t), end: toMin(x.e.t) + x.dur, sid: x.p.studentId, what: `${sname(x.p.studentId)} (${x.e.s === 'makeup' ? 'makeup' : 'extra'})` });
+  return out.sort((a, b) => a.start - b.start);
+}
+// What a one-off lesson at this time would overlap: the teacher's other lessons, and the student's lessons with other teachers.
+function clashesFor(tid, sid, date, time, dur, skipId) {
+  const a = toMin(time), b = a + dur; const hit = x => x.start < b && a < x.end;
+  const teacher = busyOn(tid, date, skipId).filter(hit);
+  const student = sid ? teacherIds().filter(x => x !== tid).flatMap(x => busyOn(x, date, skipId)).filter(x => x.sid === sid && hit(x)) : [];
+  return teacher.concat(student);
+}
+const clashText = (list, tid) => list.map(x => x.tid === tid ? `${tname(x.tid)} already has ${x.what} ${fmtTs(x.start)}–${fmtT(x.end)}` : `${sname(x.sid)} already has a lesson with ${tname(x.tid)} ${fmtTs(x.start)}–${fmtT(x.end)}`).join('; ');
+// Open stretches in a teacher's day long enough for a lesson of this length.
+function freeGaps(tid, date, dur) {
+  const busy = busyOn(tid, date); const hi = Math.max(20 * 60, ...busy.map(x => x.end)); const gaps = [];
+  let cur = Math.min(14 * 60, ...busy.map(x => x.start));
+  for (const x of busy) { if (x.start - cur >= dur) gaps.push([cur, x.start]); cur = Math.max(cur, x.end); }
+  if (hi - cur >= dur) gaps.push([cur, hi]);
+  return gaps;
+}
 function conflictsFor(tid, slot) {
   const res = { teacher: [], student: [] };
   for (const s of slotsOf(tid)) if (s.id !== slot.id && overlaps(s, slot)) res.teacher.push(s);
@@ -393,8 +418,7 @@ function renderWeek() {
   const days = [0, 1, 2, 3, 4, 6].concat(slots.some(s => s.day === 5) || timed.some(x => wd(x.e.d) === 5) ? [5] : []).sort((a, b) => a - b);
   let lo = 14 * 60, hi = 20 * 60; for (const s of slots) { lo = Math.min(lo, toMin(s.start)); hi = Math.max(hi, toMin(s.start) + s.dur); }
   for (const x of timed) { lo = Math.min(lo, toMin(x.e.t)); hi = Math.max(hi, toMin(x.e.t) + x.dur); }
-  // A weekly lesson is free on a date when its student was marked absent or the teacher cancelled.
-  const offOn = (s, date) => { if (!s.studentId) return null; const e = entryFor(pkgForDate(s.studentId, t, date), date); return e && !ST[e.s]?.counts ? e : null; };
+  const offOn = (s, date) => slotOffOn(t, s, date);
   lo = Math.floor(lo / 60) * 60; hi = Math.ceil(hi / 60) * 60; const rows = (hi - lo) / 15;
   const conflictIds = new Set();
   for (const s of slots) { const c = conflictsFor(t, s); if (c.teacher.length || c.student.length) conflictIds.add(s.id); }
@@ -416,10 +440,9 @@ function renderWeek() {
   for (const x of timed) {
     const d = wd(x.e.d); const i = days.indexOf(d); if (i < 0) continue;
     const r0 = (toMin(x.e.t) - lo) / 15 + 2; const span = Math.max(1, Math.round(x.dur / 15));
-    const me = { day: d, start: x.e.t, dur: x.dur };
-    const clash = slots.some(s => s.studentId !== x.p.studentId && overlaps(s, me) && !offOn(s, x.e.d)) || timed.some(y => y !== x && y.e.d === x.e.d && overlaps({ day: d, start: y.e.t, dur: y.dur }, me));
+    const clashes = clashesFor(t, x.p.studentId, x.e.d, x.e.t, x.dur, x.e.id); const clash = clashes.length > 0;
     const kind = x.e.s === 'makeup' ? 'Makeup' : ST[x.e.s]?.seg || 'Extra'; const tm = `${fmtTs(x.e.t)}–${fmtTs(toMin(x.e.t) + x.dur)}`;
-    g += `<button class="blk once ${clash ? 'conflict' : ''} ${span === 1 ? 'short' : ''}" style="grid-column:${i + 2};grid-row:${Math.floor(r0)} / span ${span}" data-open-pkg="${esc(x.p.id)}" title="${esc(`${kind}: ${sname(x.p.studentId)}, ${fmtD(x.e.d)} ${fmtT(x.e.t)}${x.e.n ? ' — ' + x.e.n : ''}`)}">${span === 1 ? `<span class="one"><b>${esc(kind)} · ${esc(sname(x.p.studentId))}</b> <span class="bt">${tm}</span></span>` : `<span class="bt">${tm} · ${esc(kind)}</span><b>${esc(sname(x.p.studentId))}</b>`}</button>`;
+    g += `<button class="blk once ${clash ? 'conflict' : ''} ${span === 1 ? 'short' : ''}" style="grid-column:${i + 2};grid-row:${Math.floor(r0)} / span ${span}" data-open-pkg="${esc(x.p.id)}" title="${esc(`${kind}: ${sname(x.p.studentId)}, ${fmtD(x.e.d)} ${fmtT(x.e.t)}${x.e.n ? ' — ' + x.e.n : ''}${clash ? ' — Clash: ' + clashText(clashes, t) : ''}`)}">${span === 1 ? `<span class="one"><b>${esc(kind)} · ${esc(sname(x.p.studentId))}</b> <span class="bt">${tm}</span></span>` : `<span class="bt">${tm} · ${esc(kind)}</span><b>${esc(sname(x.p.studentId))}</b>`}</button>`;
   }
   const onceList = once.length ? `<div class="card" style="padding:12px 14px;margin-top:16px"><div class="eyebrow">Makeups and extra lessons this week</div><ul class="small" style="margin:6px 0 0;padding-left:18px">${once.map(x => `<li><a data-goto-date="${x.e.d}">${esc(fmtD(x.e.d))}</a> · ${x.e.t ? `${fmtT(x.e.t)}–${fmtT(toMin(x.e.t) + x.dur)}` : '<span style="color:var(--warn)">no time set</span>'} · <a data-open-pkg="${esc(x.p.id)}">${esc(sname(x.p.studentId))}</a> · ${esc(ST[x.e.s]?.label || x.e.s)}${x.e.n ? ` · ${esc(x.e.n)}` : ''}</li>`).join('')}</ul></div>` : '';
   // Teaching time = every slot that is not a break/unavailable (lessons, group classes, reserved slots).
@@ -873,9 +896,12 @@ function drawPackage(id) {
     if (col === 'lesson_date' && isPast(el.value)) { if (!isAdmin()) { toast('Past attendance is locked. Ask a super admin to correct it.'); renderOverlay(true); return; } return openModal('correct', { pid: id, lessonId: lid, date: el.value }); }
     const ex = (p.log || []).find(x => x.id === lid);
     const patch = col === 'start_time' ? { start_time: el.value || null, dur: el.value ? ex?.du || defDur(p.studentId, p.teacherId) : null } : { [col]: el.value };
-    run(sb.from('lessons').update(patch).eq('id', lid)).then(() => renderOverlay(true)).catch(() => {}); });
+    const nd = col === 'lesson_date' ? el.value : ex?.d, nt = col === 'start_time' ? el.value : ex?.t;
+    const cl = nd && nt ? clashesFor(p.teacherId, p.studentId, nd, nt, ex?.du || defDur(p.studentId, p.teacherId), lid) : [];
+    run(sb.from('lessons').update(patch).eq('id', lid)).then(() => { renderOverlay(true); if (cl.length) toast(`Saved, but it clashes: ${clashText(cl, p.teacherId)}`, 7000); }).catch(() => {}); });
   ov.querySelectorAll('[data-lgdel]').forEach(b => b.onclick = () => { const e = (p.log || []).find(x => x.id === b.dataset.lgdel); confirmBox(`Remove the "${ST[e?.s]?.label || ''}" mark on ${fmtD(e?.d)}? This is recorded in History.`, () => run(sb.from('lessons').delete().eq('id', b.dataset.lgdel), 'Mark removed'), 'Remove mark'); });
-  $('#nlAdd').onclick = () => { const d = $('#nlD').value; if (!d) return toast('Pick a date'); if (entryFor(p, d)) return toast('A lesson is already logged on that date'); run(sb.from('lessons').insert({ package_id: id, lesson_date: d, status: $('#nlS').value, note: $('#nlN').value.trim(), start_time: $('#nlT').value || null, dur: $('#nlT').value ? defDur(p.studentId, p.teacherId) : null }), 'Lesson added').then(() => renderOverlay(true)).catch(() => {}); };
+  $('#nlAdd').onclick = () => { const d = $('#nlD').value; if (!d) return toast('Pick a date'); if (entryFor(p, d)) return toast('A lesson is already logged on that date'); const nt = $('#nlT').value; const cl = nt ? clashesFor(p.teacherId, p.studentId, d, nt, defDur(p.studentId, p.teacherId)) : [];
+    run(sb.from('lessons').insert({ package_id: id, lesson_date: d, status: $('#nlS').value, note: $('#nlN').value.trim(), start_time: nt || null, dur: nt ? defDur(p.studentId, p.teacherId) : null }), cl.length ? '' : 'Lesson added').then(() => { renderOverlay(true); if (cl.length) toast(`Added, but it clashes: ${clashText(cl, p.teacherId)}`, 7000); }).catch(() => {}); };
   if (!A) return;
   $('#pSave').onclick = () => savePkg(id, { teacherId: $('#pT').value, kind: $('#pK').value, sessions: Math.max(1, +$('#pN').value || 1), perWeek: Math.max(1, Math.min(7, +$('#pW').value || 1)), start: $('#pS').value, end: $('#pE').value, term: $('#pTerm').value.trim(), subject: $('#pSub').value.trim(), payment: $('#pP').value, price: $('#pPr').value === '' ? null : +$('#pPr').value, paidNote: $('#pPn').value.trim(), notes: $('#pNo').value }, 'Package saved').then(() => renderOverlay(true)).catch(() => {});
   const stamp = what => `${what} ${fmtD(kwToday(), { day: 'numeric', month: 'short', year: 'numeric' })} by ${S.session.user.email}`;
@@ -991,9 +1017,19 @@ function drawModal() {
     shell('Log makeup or extra lesson', '', `<div class="grid2"><label class="f">Teacher<select id="mT">${teaOptions(only || ctx.teacherId || S.weekTeacher || teacherIds()[0], only)}</select></label><label class="f">Student<select id="mSt">${stuOptions('')}</select></label>
      <label class="f">Date<input type="date" id="mD" value="${esc(ctx.date || kwToday())}"></label><label class="f">What happened<select id="mSs">${Object.entries(ST).map(([k, v]) => `<option value="${k}" ${k === 'makeup' ? 'selected' : ''}>${esc(v.label)}</option>`).join('')}</select></label>
      <label class="f">Time<input type="time" id="mTm" step="300"></label><label class="f">Length (min)<input type="number" id="mDu" min="5" max="240" step="5" value="45"></label></div>
-     <label class="f">Note<input type="text" id="mNo" placeholder="e.g. makeup for 14 Sep"></label><div id="mInfo" class="small muted"></div><div class="row-end">${cancel}<button class="btn primary" id="mOk">Log lesson</button></div>`, true);
+     <label class="f">Note<input type="text" id="mNo" placeholder="e.g. makeup for 14 Sep"></label><div id="mInfo" class="small muted"></div><div id="mClash"></div><div class="row-end">${cancel}<button class="btn primary" id="mOk">Log lesson</button></div>`, true);
     const info = () => { const sid = $('#mSt').value, tid = $('#mT').value; if (sid && !$('#mDu').dataset.touched) $('#mDu').value = defDur(sid, tid); const p = sid ? pkgForDate(sid, tid, $('#mD').value) : null; $('#mInfo').innerHTML = !sid ? '' : p ? `Goes on the ${esc(KINDS[p.kind] || '')} package: ${stats(p).used} of ${stats(p).total} used, ${stats(p).owed} makeup owed.` : '<span style="color:var(--bad)">This student has no package with this teacher.</span>'; };
-    ['mT', 'mSt', 'mD'].forEach(i => $('#' + i).onchange = info); $('#mDu').oninput = e => { e.target.dataset.touched = '1'; };
+    const check = () => {
+      const sid = $('#mSt').value, tid = $('#mT').value, d = $('#mD').value, tm = $('#mTm').value, du = Math.max(5, Math.min(240, +$('#mDu').value || 45));
+      if (!tid || !d) { $('#mClash').innerHTML = ''; return; }
+      const cl = tm ? clashesFor(tid, sid, d, tm, du) : [];
+      const gaps = freeGaps(tid, d, du);
+      $('#mClash').innerHTML = (cl.length ? `<div class="warnbox" role="alert" style="margin-top:8px"><b>⚠ Clash.</b> ${esc(clashText(cl, tid))}. Pick a free time below, or log it anyway if this is intended.</div>` : tm ? `<div class="small" style="color:var(--ok)">✓ ${esc(tname(tid))}${sid ? ` and ${esc(sname(sid))} are` : ' is'} free at this time.</div>` : '')
+        + `<div class="small muted" style="margin-top:6px">Free for ${esc(tname(tid))} on ${esc(fmtD(d))}: ${gaps.length ? gaps.map(([a, b]) => `<button type="button" class="btn sm ghost" data-gap="${toT(a)}" title="Use ${esc(fmtT(a))}">${fmtTs(a)}–${fmtT(b)}</button>`).join(' ') : 'no gap long enough.'}</div>`;
+      $('#mClash').querySelectorAll('[data-gap]').forEach(b => b.onclick = () => { $('#mTm').value = b.dataset.gap; check(); });
+      $('#mOk').textContent = cl.length ? 'Log anyway' : 'Log lesson';
+    };
+    ['mT', 'mSt', 'mD'].forEach(i => $('#' + i).onchange = () => { info(); check(); }); $('#mDu').oninput = e => { e.target.dataset.touched = '1'; check(); }; $('#mTm').oninput = check; $('#mTm').onchange = check; check();
     $('#mOk').onclick = async () => {
       const sid = $('#mSt').value, tid = $('#mT').value, d = $('#mD').value; if (!sid || !d) return toast('Choose a student and date');
       const p = pkgForDate(sid, tid, d); if (!p) return toast('This student has no package with this teacher');
