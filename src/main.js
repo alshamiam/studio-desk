@@ -9,7 +9,7 @@ const S = {
   teachers: {}, students: {}, packages: {}, profiles: [], payments: [],
   settings: { schoolName: 'Studio Desk', term: '', lowThreshold: 2 },
   session: null, me: null, loaded: false, authMode: 'signin', recovery: false,
-  tab: 'today', date: null, weekTeacher: null,
+  tab: 'today', date: null, weekTeacher: null, weekStart: null,
   pkgFilter: { teacher: 'all', state: 'active', q: '' }, payFilter: { q: '', method: 'all', status: 'all' }, hist: { rows: [], actor: 'all', area: 'all', q: '', from: '', to: '', done: false, loading: false }, stuFilter: { q: '', form: 'all', teacher: 'all' },
 };
 let drawer = null;
@@ -140,6 +140,15 @@ const entryFor = (p, date) => p ? (p.log || []).find(e => e.d === date) : null;
 const overlaps = (a, b) => a.day === b.day && toMin(a.start) < toMin(b.start) + b.dur && toMin(b.start) < toMin(a.start) + a.dur;
 function studentSlots(sid) { const out = []; for (const t of teacherIds()) for (const s of slotsOf(t)) if (s.studentId === sid) out.push({ ...s, teacherId: t }); return out.sort((a, b) => a.day - b.day || toMin(a.start) - toMin(b.start)); }
 const slotLabel = s => s.studentId ? sname(s.studentId) : (s.label || 'Reserved');
+// Usual lesson length for a student with a teacher (from their weekly slot), used for one-off lessons.
+const defDur = (sid, tid) => slotsOf(tid).find(s => s.studentId === sid)?.dur || 45;
+// One-off lessons (makeups, extras) logged on a date, with their own time if one was set.
+function datedLessons(tid, from, to) {
+  const out = [];
+  for (const p of pkgList()) if (p.teacherId === tid) for (const e of p.log || []) if (e.d >= from && e.d <= to && !slotsOf(tid).some(s => s.studentId === p.studentId && s.day === wd(e.d))) out.push({ p, e, dur: e.du || defDur(p.studentId, tid) });
+  return out.sort((a, b) => a.e.d.localeCompare(b.e.d) || (a.e.t || '99').localeCompare(b.e.t || '99'));
+}
+const weekOf = d => addDays(d, -wd(d));
 function conflictsFor(tid, slot) {
   const res = { teacher: [], student: [] };
   for (const s of slotsOf(tid)) if (s.id !== slot.id && overlaps(s, slot)) res.teacher.push(s);
@@ -153,7 +162,7 @@ async function loadAll() {
   const seq = ++loadSeq;
   const q = await Promise.all([
     sb.from('teachers').select('*'), sb.from('students').select('*'), sb.from('packages').select('*'),
-    sb.from('lessons').select('id,package_id,lesson_date,status,note'), sb.from('slots').select('*'),
+    sb.from('lessons').select('id,package_id,lesson_date,status,note,start_time,dur'), sb.from('slots').select('*'),
     sb.from('settings').select('*').maybeSingle(),
     isAdmin() ? sb.from('profiles').select('*').order('created_at') : Promise.resolve({ data: [] }),
     isAdmin() ? sb.from('payments').select('*').order('created_at', { ascending: false }) : Promise.resolve({ data: [] }),
@@ -168,7 +177,7 @@ async function loadAll() {
   for (const r of s) students[r.id] = { name: r.name, guardian: r.guardian, phone: r.phone, regForm: r.reg_form, notes: r.notes, archived: r.archived, photo: r.photo };
   const packages = {};
   for (const r of p) packages[r.id] = { studentId: r.student_id, teacherId: r.teacher_id, subject: r.subject, kind: r.kind, sessions: r.sessions, perWeek: r.per_week, start: r.start_date, end: r.end_date, term: r.term, payment: r.payment, paidNote: r.paid_note, price: r.price, notes: r.notes, closed: r.closed, log: [] };
-  for (const r of l) packages[r.package_id]?.log.push({ id: r.id, d: r.lesson_date, s: r.status, n: r.note });
+  for (const r of l) packages[r.package_id]?.log.push({ id: r.id, d: r.lesson_date, s: r.status, n: r.note, t: r.start_time || null, du: r.dur || null });
   for (const k in packages) packages[k].log.sort((a, b) => a.d.localeCompare(b.d));
   Object.assign(S, { teachers, students, packages, profiles: pr || [], payments: pay || [], loaded: true });
   if (st) S.settings = { schoolName: st.school_name, term: st.term, lowThreshold: st.low_threshold };
@@ -192,11 +201,11 @@ async function run(promise, okMsg) {
 const pkgCols = { teacherId: 'teacher_id', studentId: 'student_id', subject: 'subject', kind: 'kind', sessions: 'sessions', perWeek: 'per_week', start: 'start_date', end: 'end_date', term: 'term', payment: 'payment', paidNote: 'paid_note', price: 'price', notes: 'notes', closed: 'closed' };
 const toRow = (patch, map) => { const o = {}; for (const k in patch) if (map[k]) o[map[k]] = patch[k] === '' && (k === 'start' || k === 'end') ? null : patch[k]; return o; };
 const savePkg = (id, patch, msg) => run(sb.from('packages').update(toRow(patch, pkgCols)).eq('id', id), msg);
-async function setLog(pid, date, status, note) {
+async function setLog(pid, date, status, note, time, dur) {
   const e = entryFor(S.packages[pid], date);
   if (status == null) { if (e) await run(sb.from('lessons').delete().eq('id', e.id)); return; }
   if (e) return run(sb.from('lessons').update(note != null ? { status, note } : { status }).eq('id', e.id));
-  return run(sb.from('lessons').insert({ package_id: pid, lesson_date: date, status, note: note || '' }));
+  return run(sb.from('lessons').insert({ package_id: pid, lesson_date: date, status, note: note || '', start_time: time || null, dur: time ? dur || null : null }));
 }
 const slotRow = (tid, s) => ({ id: s.id, teacher_id: tid, day: s.day, start_time: s.start, dur: s.dur, student_id: s.studentId, label: s.label, status: s.status, note: s.note });
 const stuCols = { name: 'name', guardian: 'guardian', phone: 'phone', regForm: 'reg_form', notes: 'notes', archived: 'archived' };
@@ -352,13 +361,13 @@ function renderToday() {
     if (!sl.length && !extras.length) continue; any = true;
     let rows = sl.map(s => {
       const end = toMin(s.start) + s.dur;
-      if (!s.studentId) return `<div class="lesson blocked"><span class="time">${fmtTs(s.start)}–${fmtTs(end)}</span><span>${esc(s.label || 'Reserved')}${s.status === 'tentative' ? ' · not confirmed' : ''}</span><span></span></div>`;
+      if (!s.studentId) return [toMin(s.start), `<div class="lesson blocked"><span class="time">${fmtTs(s.start)}–${fmtTs(end)}</span><span>${esc(s.label || 'Reserved')}${s.status === 'tentative' ? ' · not confirmed' : ''}</span><span></span></div>`];
       const p = pkgForDate(s.studentId, t, d); const e = entryFor(p, d); const st = p ? stats(p) : null;
       const info = p ? `${KINDS[p.kind] || ''} · ${st.used} of ${st.total} used${st.left <= 0 ? ' · <span style="color:var(--bad)">finished</span>' : st.state === 'low' ? ` · <span style="color:var(--warn)">${st.left} left</span>` : ''}${st.owed ? ` · ${st.owed} makeup owed` : ''}` : '<span style="color:var(--bad)">No open package</span>';
       const seg = p ? segButtons(p.id, d, e?.s, ['present', 'absent', 'noshow', 'cancelled']) : (isAdmin() ? `<button class="btn sm" data-new-pkg="${esc(s.studentId)}|${esc(t)}">Add package</button>` : '<span></span>');
-      return `<div class="lesson"><span class="time">${fmtTs(s.start)}–${fmtTs(end)}</span><div class="who"><b class="namecell">${avatar('student', s.studentId, 26)}<a style="color:inherit;cursor:pointer" ${p ? `data-open-pkg="${esc(p.id)}"` : `data-open-stu="${esc(s.studentId)}"`}>${esc(sname(s.studentId))}</a></b>${s.status === 'tentative' ? ' <span class="pill warn">not confirmed</span>' : ''}<span class="small muted">${info}${e?.n ? ` · ${esc(e.n)}` : ''}</span></div>${seg}</div>`;
-    }).join('');
-    rows += extras.map(p => { const e = entryFor(p, d); const st = stats(p); return `<div class="lesson"><span class="time">extra</span><div class="who"><b class="namecell">${avatar('student', p.studentId, 26)}<a style="color:inherit;cursor:pointer" data-open-pkg="${esc(p.id)}">${esc(sname(p.studentId))}</a></b><span class="small muted">${st.used} of ${st.total} used${e.n ? ` · ${esc(e.n)}` : ''}</span></div>${segButtons(p.id, d, e.s, ['makeup', 'present', 'absent', 'noshow', 'cancelled'])}</div>`; }).join('');
+      return [toMin(s.start), `<div class="lesson"><span class="time">${fmtTs(s.start)}–${fmtTs(end)}</span><div class="who"><b class="namecell">${avatar('student', s.studentId, 26)}<a style="color:inherit;cursor:pointer" ${p ? `data-open-pkg="${esc(p.id)}"` : `data-open-stu="${esc(s.studentId)}"`}>${esc(sname(s.studentId))}</a></b>${s.status === 'tentative' ? ' <span class="pill warn">not confirmed</span>' : ''}<span class="small muted">${info}${e?.n ? ` · ${esc(e.n)}` : ''}</span></div>${seg}</div>`];
+    });
+    rows = rows.concat(extras.map(p => { const e = entryFor(p, d); const st = stats(p); const du = e.du || defDur(p.studentId, t); return [e.t ? toMin(e.t) : 24 * 60, `<div class="lesson"><span class="time">${e.t ? `${fmtTs(e.t)}–${fmtTs(toMin(e.t) + du)}` : 'extra'}</span><div class="who"><b class="namecell">${avatar('student', p.studentId, 26)}<a style="color:inherit;cursor:pointer" data-open-pkg="${esc(p.id)}">${esc(sname(p.studentId))}</a></b><span class="small muted">${st.used} of ${st.total} used${e.n ? ` · ${esc(e.n)}` : ''}</span></div>${segButtons(p.id, d, e.s, ['makeup', 'present', 'absent', 'noshow', 'cancelled'])}</div>`]; })).sort((a, b) => a[0] - b[0]).map(r => r[1]).join('');
     body += `<section class="tgroup"><h3>${avatar('teacher', t, 30)}${esc(tname(t))}</h3><div class="card">${rows}</div></section>`;
   }
   if (!any) body = `<div class="card empty">No lessons on the timetable for ${DAYS[w]}s.<br><span class="small">Use “Log makeup or extra” to record a lesson on this day.</span></div>`;
@@ -379,12 +388,17 @@ function renderWeek() {
   if (!S.weekTeacher || !S.teachers[S.weekTeacher]) S.weekTeacher = myTeacher() && S.teachers[myTeacher()] ? myTeacher() : tids[0];
   const t = S.weekTeacher; const slots = slotsOf(t); const editable = canEditSlots(t);
   if (!t) { $('#view').innerHTML = '<div class="card empty">No teachers yet.</div>'; return; }
-  const days = [0, 1, 2, 3, 4, 6].concat(slots.some(s => s.day === 5) ? [5] : []).sort((a, b) => a - b);
+  const today = kwToday(); const ws = S.weekStart || weekOf(today); const dateOf = d => addDays(ws, d);
+  const once = datedLessons(t, ws, addDays(ws, 6)); const timed = once.filter(x => x.e.t);
+  const days = [0, 1, 2, 3, 4, 6].concat(slots.some(s => s.day === 5) || timed.some(x => wd(x.e.d) === 5) ? [5] : []).sort((a, b) => a - b);
   let lo = 14 * 60, hi = 20 * 60; for (const s of slots) { lo = Math.min(lo, toMin(s.start)); hi = Math.max(hi, toMin(s.start) + s.dur); }
+  for (const x of timed) { lo = Math.min(lo, toMin(x.e.t)); hi = Math.max(hi, toMin(x.e.t) + x.dur); }
+  // A weekly lesson is free on a date when its student was marked absent or the teacher cancelled.
+  const offOn = (s, date) => { if (!s.studentId) return null; const e = entryFor(pkgForDate(s.studentId, t, date), date); return e && !ST[e.s]?.counts ? e : null; };
   lo = Math.floor(lo / 60) * 60; hi = Math.ceil(hi / 60) * 60; const rows = (hi - lo) / 15;
   const conflictIds = new Set();
   for (const s of slots) { const c = conflictsFor(t, s); if (c.teacher.length || c.student.length) conflictIds.add(s.id); }
-  let g = '<div class="hd"></div>' + days.map((d, i) => `<div class="hd" style="grid-column:${i + 2};grid-row:1">${DAYS[d]}</div>`).join('');
+  let g = '<div class="hd"></div>' + days.map((d, i) => `<div class="hd${dateOf(d) === today ? ' now' : ''}" style="grid-column:${i + 2};grid-row:1">${DAYS[d]}<span class="hdd">${esc(chipD(dateOf(d)))}</span></div>`).join('');
   for (let r = 0; r < rows; r++) {
     const m = lo + r * 15;
     if (m % 60 === 0) g += `<div class="tm" style="grid-column:1;grid-row:${r + 2}">${fmtT(m).replace(':00', '')}</div>`;
@@ -393,11 +407,21 @@ function renderWeek() {
   for (const s of slots) {
     const i = days.indexOf(s.day); if (i < 0) continue;
     const r0 = (toMin(s.start) - lo) / 15 + 2; const span = Math.max(1, Math.round(s.dur / 15));
-    const cls = ['blk', s.status !== 'confirmed' ? s.status : '', conflictIds.has(s.id) ? 'conflict' : '', span === 1 ? 'short' : ''].join(' ');
+    const off = offOn(s, dateOf(s.day));
+    const cls = ['blk', s.status !== 'confirmed' ? s.status : '', conflictIds.has(s.id) ? 'conflict' : '', span === 1 ? 'short' : '', off ? 'off' : ''].join(' ');
     const pk = s.studentId ? pkgForDate(s.studentId, t, kwToday()) : null; const st = pk ? stats(pk) : null;
-    const flag = s.studentId && !pk ? 'no package' : st && st.state === 'finished' ? 'finished' : st && st.state === 'low' ? `${st.left} left` : '';
-    g += `<button class="${cls}" style="grid-column:${i + 2};grid-row:${Math.floor(r0)} / span ${span};background:${esc(tcolor(t))};color:#fff" data-edit-slot="${esc(s.id)}" title="${esc(slotLabel(s) + ' ' + fmtT(s.start) + (s.note ? ' — ' + s.note : ''))}">${span === 1 ? `<span class="one"><b>${s.status === 'blocked' && /break/i.test(s.label || '') ? '☕ ' : ''}${esc(slotLabel(s))}</b> <span class="bt">${fmtTs(s.start)}–${fmtTs(toMin(s.start) + s.dur)}</span></span>` : `<span class="bt">${fmtTs(s.start)}–${fmtTs(toMin(s.start) + s.dur)}</span><b>${esc(slotLabel(s))}</b>${span > 2 && flag ? `<span class="bt">${esc(flag)}</span>` : ''}`}</button>`;
+    const flag = off ? (ST[off.s]?.seg || off.s).toLowerCase() : s.studentId && !pk ? 'no package' : st && st.state === 'finished' ? 'finished' : st && st.state === 'low' ? `${st.left} left` : '';
+    g += `<button class="${cls}" style="grid-column:${i + 2};grid-row:${Math.floor(r0)} / span ${span};background:${esc(tcolor(t))};color:#fff" data-edit-slot="${esc(s.id)}" title="${esc(slotLabel(s) + ' ' + fmtT(s.start) + (off ? ` — ${ST[off.s]?.label || off.s} on ${fmtD(off.d)}` : '') + (s.note ? ' — ' + s.note : ''))}">${span === 1 ? `<span class="one"><b>${s.status === 'blocked' && /break/i.test(s.label || '') ? '☕ ' : ''}${esc(slotLabel(s))}</b> <span class="bt">${fmtTs(s.start)}–${fmtTs(toMin(s.start) + s.dur)}</span></span>` : `<span class="bt">${fmtTs(s.start)}–${fmtTs(toMin(s.start) + s.dur)}</span><b>${esc(slotLabel(s))}</b>${span > 2 && flag ? `<span class="bt">${esc(flag)}</span>` : ''}`}</button>`;
   }
+  for (const x of timed) {
+    const d = wd(x.e.d); const i = days.indexOf(d); if (i < 0) continue;
+    const r0 = (toMin(x.e.t) - lo) / 15 + 2; const span = Math.max(1, Math.round(x.dur / 15));
+    const me = { day: d, start: x.e.t, dur: x.dur };
+    const clash = slots.some(s => s.studentId !== x.p.studentId && overlaps(s, me) && !offOn(s, x.e.d)) || timed.some(y => y !== x && y.e.d === x.e.d && overlaps({ day: d, start: y.e.t, dur: y.dur }, me));
+    const kind = x.e.s === 'makeup' ? 'Makeup' : ST[x.e.s]?.seg || 'Extra'; const tm = `${fmtTs(x.e.t)}–${fmtTs(toMin(x.e.t) + x.dur)}`;
+    g += `<button class="blk once ${clash ? 'conflict' : ''} ${span === 1 ? 'short' : ''}" style="grid-column:${i + 2};grid-row:${Math.floor(r0)} / span ${span}" data-open-pkg="${esc(x.p.id)}" title="${esc(`${kind}: ${sname(x.p.studentId)}, ${fmtD(x.e.d)} ${fmtT(x.e.t)}${x.e.n ? ' — ' + x.e.n : ''}`)}">${span === 1 ? `<span class="one"><b>${esc(kind)} · ${esc(sname(x.p.studentId))}</b> <span class="bt">${tm}</span></span>` : `<span class="bt">${tm} · ${esc(kind)}</span><b>${esc(sname(x.p.studentId))}</b>`}</button>`;
+  }
+  const onceList = once.length ? `<div class="card" style="padding:12px 14px;margin-top:16px"><div class="eyebrow">Makeups and extra lessons this week</div><ul class="small" style="margin:6px 0 0;padding-left:18px">${once.map(x => `<li><a data-goto-date="${x.e.d}">${esc(fmtD(x.e.d))}</a> · ${x.e.t ? `${fmtT(x.e.t)}–${fmtT(toMin(x.e.t) + x.dur)}` : '<span style="color:var(--warn)">no time set</span>'} · <a data-open-pkg="${esc(x.p.id)}">${esc(sname(x.p.studentId))}</a> · ${esc(ST[x.e.s]?.label || x.e.s)}${x.e.n ? ` · ${esc(x.e.n)}` : ''}</li>`).join('')}</ul></div>` : '';
   // Teaching time = every slot that is not a break/unavailable (lessons, group classes, reserved slots).
   // Overlapping slots are merged so clashes are not counted twice. Unconfirmed slots are reported separately.
   const unionMin = list => { const iv = list.map(x => [toMin(x.start), toMin(x.start) + x.dur]).sort((a, b) => a[0] - b[0]); let tot = 0, cs = -1, ce = -1; for (const [a, b] of iv) { if (a > ce) { if (ce > cs) tot += ce - cs; cs = a; ce = b; } else ce = Math.max(ce, b); } if (ce > cs) tot += ce - cs; return tot; };
@@ -415,12 +439,18 @@ function renderWeek() {
   const weekAll = days.reduce((a, d) => a + unionMin(teach.filter(x => x.day === d)), 0);
   $('#view').innerHTML = `
   <div class="bar"><h2>Timetable</h2><div class="tchips">${tids.map(id => `<button class="tchip" aria-pressed="${id === t}" data-wt="${esc(id)}">${avatar('teacher', id, 24)}${esc(tname(id))}</button>`).join('')}</div></div>
+  <div class="bar daynav"><span class="big">${ws === weekOf(today) ? 'This week' : 'Week of ' + esc(fmtD(ws, { day: 'numeric', month: 'long' }))}</span><span class="muted">${esc(fmtD(ws, { day: 'numeric', month: 'short' }))} – ${esc(fmtD(addDays(ws, 6), { day: 'numeric', month: 'short', year: 'numeric' }))}</span>
+   <span style="margin-left:auto" class="daynav"><button class="btn sm" data-wk="-1" aria-label="Previous week">‹ Prev</button><input type="date" id="wkpick" value="${ws}" aria-label="Week"><button class="btn sm" data-wk="1" aria-label="Next week">Next ›</button>${ws === weekOf(today) ? '' : '<button class="btn sm" data-wk="0">This week</button>'}<button class="btn primary sm" id="wkLog">Log makeup or extra</button></span></div>
   <p class="muted small" style="margin:-6px 0 12px"><b style="color:var(--ink)">${hrs(weekConf)}</b> teaching a week · ${conf.length} weekly lessons${weekAll > weekConf ? ` · <span style="color:var(--warn)">+ ${hrs(weekAll - weekConf)} not confirmed</span>` : ''}.${editable ? ' Click an empty time to add a lesson; click a lesson to change or remove it.' : ''}</p>
   <div class="wk-wrap"><div class="wk" style="grid-template-columns:62px repeat(${days.length},minmax(104px,1fr));grid-template-rows:auto repeat(${rows},var(--row))">${g}</div></div>
-  <div class="legend"><span><i class="sw" style="background:${esc(tcolor(t))}"></i>Confirmed</span><span><i class="sw" style="background:repeating-linear-gradient(135deg,var(--warn-soft) 0 4px,var(--surface) 4px 7px);outline:1px dashed var(--warn)"></i>Not confirmed</span><span><i class="sw" style="background:var(--brk-bg);border-left:3px solid var(--gold)"></i>Break or unavailable</span><span><i class="sw" style="outline:2px solid var(--bad)"></i>Clash</span></div>
+  <div class="legend"><span><i class="sw" style="background:${esc(tcolor(t))}"></i>Confirmed</span><span><i class="sw" style="background:repeating-linear-gradient(135deg,var(--warn-soft) 0 4px,var(--surface) 4px 7px);outline:1px dashed var(--warn)"></i>Not confirmed</span><span><i class="sw" style="background:var(--brk-bg);border-left:3px solid var(--gold)"></i>Break or unavailable</span><span><i class="sw" style="background:var(--blue)"></i>Makeup or extra (this date only)</span><span><i class="sw" style="background:var(--muted);opacity:.45"></i>Absent or cancelled this week</span><span><i class="sw" style="outline:2px solid var(--bad)"></i>Clash</span></div>
+  ${onceList}
   ${S.teachers[t]?.notes ? `<div class="card" style="padding:12px 14px;margin-top:16px"><div class="eyebrow">Notes and requests</div><div class="small" style="white-space:pre-wrap;margin-top:4px">${esc(S.teachers[t].notes)}</div></div>` : ''}
   <h3 style="margin-top:22px;font-size:16px">Teaching hours</h3><p class="small muted" style="margin:2px 0 8px">Lessons, group classes and reserved slots. Breaks and unavailable times are not counted.</p><div class="gaps">${dayCards}<div class="card" style="border-color:var(--gold)"><b>Week</b><div class="num" style="font-size:18px">${hrs(weekConf)}</div><span class="small muted">${conf.length} lessons</span>${weekAll > weekConf ? `<div class="small" style="color:var(--warn)">+ ${hrs(weekAll - weekConf)} not confirmed</div>` : ''}</div></div>`;
   document.querySelectorAll('[data-wt]').forEach(b => b.onclick = () => { S.weekTeacher = b.dataset.wt; render(); });
+  document.querySelectorAll('[data-wk]').forEach(b => b.onclick = () => { const n = +b.dataset.wk; S.weekStart = n === 0 ? null : addDays(ws, 7 * n); render(); });
+  $('#wkpick').onchange = e => { if (e.target.value) { S.weekStart = weekOf(e.target.value); render(); } };
+  $('#wkLog').onclick = () => openModal('extra', { date: ws <= today && today <= addDays(ws, 6) ? today : ws, teacherId: t });
 }
 
 /* ---------- PACKAGES / ATTENDANCE ---------- */
@@ -808,7 +838,7 @@ function drawPackage(id) {
   const p = S.packages[id]; if (!p) { closeOverlay(); return; }
   const s = stats(p); const A = isAdmin(); const dis = A ? '' : 'disabled';
   const opts = (o, cur) => Object.entries(o).map(([k, v]) => `<option value="${k}" ${cur === k ? 'selected' : ''}>${esc(Array.isArray(v) ? v[0] : (v.label || v))}</option>`).join('');
-  const log = (p.log || []).map(e => isPast(e.d) ? `<div class="logrow past"><span class="small">🔒 ${esc(fmtD(e.d))}</span><span class="chip ${esc(e.s)}" style="justify-self:start">${esc(ST[e.s]?.label || e.s)}</span><span class="lnote small muted">${esc(e.n || '')}</span>${A ? `<button class="btn ghost sm" data-correct="${esc(e.id)}" title="Correct this past mark (reason required)" aria-label="Correct">✎</button>` : '<span></span>'}</div>` : `<div class="logrow"><input type="date" value="${esc(e.d)}" data-lg="${esc(e.id)}|lesson_date" aria-label="Date"><select data-lg="${esc(e.id)}|status" aria-label="Status">${opts(ST, e.s)}</select><input class="lnote" type="text" value="${esc(e.n || '')}" placeholder="Note" data-lg="${esc(e.id)}|note" aria-label="Note"><button class="btn ghost sm" data-lgdel="${esc(e.id)}" aria-label="Remove">✕</button></div>`).join('');
+  const log = (p.log || []).map(e => isPast(e.d) ? `<div class="logrow past"><span class="small">🔒 ${esc(fmtD(e.d))}</span><span class="chip ${esc(e.s)}" style="justify-self:start">${esc(ST[e.s]?.label || e.s)}</span><span class="ltime small">${e.t ? esc(fmtT(e.t)) : ''}</span><span class="lnote small muted">${esc(e.n || '')}</span>${A ? `<button class="btn ghost sm" data-correct="${esc(e.id)}" title="Correct this past mark (reason required)" aria-label="Correct">✎</button>` : '<span></span>'}</div>` : `<div class="logrow"><input type="date" value="${esc(e.d)}" data-lg="${esc(e.id)}|lesson_date" aria-label="Date"><select data-lg="${esc(e.id)}|status" aria-label="Status">${opts(ST, e.s)}</select><input class="ltime" type="time" step="300" value="${esc(e.t || '')}" data-lg="${esc(e.id)}|start_time" aria-label="Time (for a makeup or extra lesson)" title="Time, for a makeup or extra lesson"><input class="lnote" type="text" value="${esc(e.n || '')}" placeholder="Note" data-lg="${esc(e.id)}|note" aria-label="Note"><button class="btn ghost sm" data-lgdel="${esc(e.id)}" aria-label="Remove">✕</button></div>`).join('');
   shell(sname(p.studentId), `${esc(tname(p.teacherId))} · ${esc(KINDS[p.kind] || '')} package${p.term ? ' · ' + esc(p.term) : ''}`, `
    <div class="namecell" style="gap:10px">${avatar('student', p.studentId, 44)}${avatar('teacher', p.teacherId, 32)}</div>
    ${p.closed ? '<div class="infobox">This package is closed. It is kept for history.</div>' : s.used > s.total ? `<div class="badbox">${s.used - s.total} lesson(s) used beyond the package. Renew and move the extra lessons, or adjust the size.</div>` : s.state === 'finished' ? '<div class="badbox">All lessons used. Renew to keep marking attendance.</div>' : ''}
@@ -816,7 +846,7 @@ function drawPackage(id) {
    <div class="stats"><div class="stat"><b>${s.used}</b><span>used of ${s.total}</span></div><div class="stat"><b style="color:${s.left <= 0 ? 'var(--bad)' : s.state === 'low' ? 'var(--warn)' : 'inherit'}">${s.left}</b><span>left</span></div><div class="stat"><b>${s.owed}</b><span>makeups owed</span></div><div class="stat"><b>${s.c.absent + s.c.cancelled}</b><span>missed</span></div></div>
    <div class="sect"><h3>Lessons <span class="muted small" style="font-weight:400">${(p.log || []).length} logged${s.last ? ' · last ' + esc(fmtD(s.last)) : ''}</span></h3>
     <div class="card" style="padding:4px 12px"><div class="loglist">${log || '<div class="empty small">No lessons logged yet.</div>'}</div></div>
-    <div class="logrow" style="border:0"><input type="date" id="nlD" value="${kwToday()}" aria-label="New lesson date"><select id="nlS" aria-label="New lesson status">${opts(ST, 'present')}</select><input class="lnote" type="text" id="nlN" placeholder="Note (optional)" aria-label="New lesson note"><button class="btn sm primary" id="nlAdd" aria-label="Add lesson">+</button></div>
+    <div class="logrow" style="border:0"><input type="date" id="nlD" value="${kwToday()}" aria-label="New lesson date"><select id="nlS" aria-label="New lesson status">${opts(ST, 'present')}</select><input class="ltime" type="time" step="300" id="nlT" aria-label="New lesson time (optional)" title="Time, for a makeup or extra lesson"><input class="lnote" type="text" id="nlN" placeholder="Note (optional)" aria-label="New lesson note"><button class="btn sm primary" id="nlAdd" aria-label="Add lesson">+</button></div>
    </div>
    <div class="sect"><h3>Package</h3><div class="grid2">
     <label class="f">Teacher<select id="pT" ${dis}>${teacherIds().map(t => `<option value="${esc(t)}" ${p.teacherId === t ? 'selected' : ''}>${esc(tname(t))}</option>`).join('')}</select></label>
@@ -841,9 +871,11 @@ function drawPackage(id) {
   ov.querySelectorAll('[data-correct]').forEach(b => b.onclick = () => openModal('correct', { pid: id, lessonId: b.dataset.correct }));
   ov.querySelectorAll('[data-lg]').forEach(el => el.onchange = () => { const [lid, col] = el.dataset.lg.split('|'); if (col === 'lesson_date' && !el.value) return;
     if (col === 'lesson_date' && isPast(el.value)) { if (!isAdmin()) { toast('Past attendance is locked. Ask a super admin to correct it.'); renderOverlay(true); return; } return openModal('correct', { pid: id, lessonId: lid, date: el.value }); }
-    run(sb.from('lessons').update({ [col]: el.value }).eq('id', lid)).then(() => renderOverlay(true)).catch(() => {}); });
+    const ex = (p.log || []).find(x => x.id === lid);
+    const patch = col === 'start_time' ? { start_time: el.value || null, dur: el.value ? ex?.du || defDur(p.studentId, p.teacherId) : null } : { [col]: el.value };
+    run(sb.from('lessons').update(patch).eq('id', lid)).then(() => renderOverlay(true)).catch(() => {}); });
   ov.querySelectorAll('[data-lgdel]').forEach(b => b.onclick = () => { const e = (p.log || []).find(x => x.id === b.dataset.lgdel); confirmBox(`Remove the "${ST[e?.s]?.label || ''}" mark on ${fmtD(e?.d)}? This is recorded in History.`, () => run(sb.from('lessons').delete().eq('id', b.dataset.lgdel), 'Mark removed'), 'Remove mark'); });
-  $('#nlAdd').onclick = () => { const d = $('#nlD').value; if (!d) return toast('Pick a date'); if (entryFor(p, d)) return toast('A lesson is already logged on that date'); run(sb.from('lessons').insert({ package_id: id, lesson_date: d, status: $('#nlS').value, note: $('#nlN').value.trim() }), 'Lesson added').then(() => renderOverlay(true)).catch(() => {}); };
+  $('#nlAdd').onclick = () => { const d = $('#nlD').value; if (!d) return toast('Pick a date'); if (entryFor(p, d)) return toast('A lesson is already logged on that date'); run(sb.from('lessons').insert({ package_id: id, lesson_date: d, status: $('#nlS').value, note: $('#nlN').value.trim(), start_time: $('#nlT').value || null, dur: $('#nlT').value ? defDur(p.studentId, p.teacherId) : null }), 'Lesson added').then(() => renderOverlay(true)).catch(() => {}); };
   if (!A) return;
   $('#pSave').onclick = () => savePkg(id, { teacherId: $('#pT').value, kind: $('#pK').value, sessions: Math.max(1, +$('#pN').value || 1), perWeek: Math.max(1, Math.min(7, +$('#pW').value || 1)), start: $('#pS').value, end: $('#pE').value, term: $('#pTerm').value.trim(), subject: $('#pSub').value.trim(), payment: $('#pP').value, price: $('#pPr').value === '' ? null : +$('#pPr').value, paidNote: $('#pPn').value.trim(), notes: $('#pNo').value }, 'Package saved').then(() => renderOverlay(true)).catch(() => {});
   const stamp = what => `${what} ${fmtD(kwToday(), { day: 'numeric', month: 'short', year: 'numeric' })} by ${S.session.user.email}`;
@@ -956,17 +988,18 @@ function drawModal() {
     };
   } else if (kind === 'extra') {
     const only = isAdmin() ? null : myTeacher();
-    shell('Log makeup or extra lesson', '', `<div class="grid2"><label class="f">Teacher<select id="mT">${teaOptions(only || S.weekTeacher || teacherIds()[0], only)}</select></label><label class="f">Student<select id="mSt">${stuOptions('')}</select></label>
-     <label class="f">Date<input type="date" id="mD" value="${esc(ctx.date || kwToday())}"></label><label class="f">What happened<select id="mSs">${Object.entries(ST).map(([k, v]) => `<option value="${k}" ${k === 'makeup' ? 'selected' : ''}>${esc(v.label)}</option>`).join('')}</select></label></div>
+    shell('Log makeup or extra lesson', '', `<div class="grid2"><label class="f">Teacher<select id="mT">${teaOptions(only || ctx.teacherId || S.weekTeacher || teacherIds()[0], only)}</select></label><label class="f">Student<select id="mSt">${stuOptions('')}</select></label>
+     <label class="f">Date<input type="date" id="mD" value="${esc(ctx.date || kwToday())}"></label><label class="f">What happened<select id="mSs">${Object.entries(ST).map(([k, v]) => `<option value="${k}" ${k === 'makeup' ? 'selected' : ''}>${esc(v.label)}</option>`).join('')}</select></label>
+     <label class="f">Time<input type="time" id="mTm" step="300"></label><label class="f">Length (min)<input type="number" id="mDu" min="5" max="240" step="5" value="45"></label></div>
      <label class="f">Note<input type="text" id="mNo" placeholder="e.g. makeup for 14 Sep"></label><div id="mInfo" class="small muted"></div><div class="row-end">${cancel}<button class="btn primary" id="mOk">Log lesson</button></div>`, true);
-    const info = () => { const sid = $('#mSt').value, tid = $('#mT').value; const p = sid ? pkgForDate(sid, tid, $('#mD').value) : null; $('#mInfo').innerHTML = !sid ? '' : p ? `Goes on the ${esc(KINDS[p.kind] || '')} package: ${stats(p).used} of ${stats(p).total} used, ${stats(p).owed} makeup owed.` : '<span style="color:var(--bad)">This student has no package with this teacher.</span>'; };
-    ['mT', 'mSt', 'mD'].forEach(i => $('#' + i).onchange = info);
+    const info = () => { const sid = $('#mSt').value, tid = $('#mT').value; if (sid && !$('#mDu').dataset.touched) $('#mDu').value = defDur(sid, tid); const p = sid ? pkgForDate(sid, tid, $('#mD').value) : null; $('#mInfo').innerHTML = !sid ? '' : p ? `Goes on the ${esc(KINDS[p.kind] || '')} package: ${stats(p).used} of ${stats(p).total} used, ${stats(p).owed} makeup owed.` : '<span style="color:var(--bad)">This student has no package with this teacher.</span>'; };
+    ['mT', 'mSt', 'mD'].forEach(i => $('#' + i).onchange = info); $('#mDu').oninput = e => { e.target.dataset.touched = '1'; };
     $('#mOk').onclick = async () => {
       const sid = $('#mSt').value, tid = $('#mT').value, d = $('#mD').value; if (!sid || !d) return toast('Choose a student and date');
       const p = pkgForDate(sid, tid, d); if (!p) return toast('This student has no package with this teacher');
       if (entryFor(p, d)) return toast('A lesson is already logged for that date. Edit it in the package.');
-      const st = $('#mSs').value, no = $('#mNo').value.trim(); closeOverlay();
-      await setLog(p.id, d, st, no).then(() => toast('Lesson logged')).catch(() => {});
+      const st = $('#mSs').value, no = $('#mNo').value.trim(), tm = $('#mTm').value || null, du = Math.max(5, Math.min(240, +$('#mDu').value || 45)); closeOverlay();
+      await setLog(p.id, d, st, no, tm, du).then(() => toast('Lesson logged')).catch(() => {});
     };
   } else if (kind === 'slot') {
     const tid = ctx.teacherId; const ex = ctx.slotId ? slotsOf(tid).find(s => s.id === ctx.slotId) : null; const editable = canEditSlots(tid);
