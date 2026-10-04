@@ -599,6 +599,15 @@ function renderSetup() {
 /* ---------- PAYMENTS ---------- */
 const PKIND = { package: 'Package', book: 'Book', trial: 'Trial lesson', single: 'Single session', other: 'Other' };
 const METHODS = ['Company account (link)', 'KNET machine', 'Paid to Ms. Chaimaa', 'Paid to Ms. Nilufar', 'Cash', 'Bank transfer'];
+const rcptNo = x => x?.receipt_no ? 'R-' + String(x.receipt_no).padStart(5, '0') : '';
+const fmtLong = d => fmtD(d, { day: 'numeric', month: 'long', year: 'numeric' });
+// Plain-text receipt for pasting into WhatsApp or an email.
+function receiptText(x) {
+  const p = S.packages[x.package_id]; const st = x.status === 'paid' ? 'Paid' : x.status === 'void' ? 'VOIDED' : 'Pending';
+  return [`${S.settings.schoolName || 'Aria Music Academy'} · Payment receipt ${rcptNo(x)}`, `Student: ${sname(x.student_id)}`,
+    p ? `Package: ${pkgRef(p)} · ${tname(p.teacherId)} · ${KINDS[p.kind] || p.kind}${p.term ? ' · ' + p.term : ''} (${p.sessions} lessons)` : `For: ${PKIND[x.kind] || x.kind}`,
+    `Amount: ${kd(x.amount)} · ${st}${x.method ? ' · ' + x.method : ''}`, `Date: ${fmtLong(x.paid_on || String(x.created_at || '').slice(0, 10) || kwToday())}`, x.note ? `Note: ${x.note}` : ''].filter(Boolean).join('\n');
+}
 const kd = n => `${Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 3 })} KD`;
 // Packages a student's payment can belong to (which is what ties it to a teacher), open ones first.
 const payPkgs = sid => pkgList().filter(p => p.studentId === sid).sort((a, b) => (a.closed - b.closed) || (b.start || '').localeCompare(a.start || ''));
@@ -608,7 +617,7 @@ function paymentsSect(list, sid, pid) {
   const paid = list.filter(x => x.status === 'paid').reduce((a, x) => a + Number(x.amount), 0);
   const pend = list.filter(x => x.status === 'pending').reduce((a, x) => a + Number(x.amount), 0);
   return `<div class="sect" id="paySect"><h3>Payments <span class="muted small" style="font-weight:400">${kd(paid)} paid${pend ? ` · ${kd(pend)} pending` : ''}</span></h3>
-   <div class="card" style="padding:4px 12px">${list.length ? list.map(x => `<div class="payrow ${x.status === 'void' ? 'void' : ''}"><div><b>${esc(kd(x.amount))}</b> <span class="pill ${x.status === 'paid' ? 'ok' : x.status === 'void' ? '' : 'warn'}">${x.status === 'paid' ? 'Paid' : x.status === 'void' ? 'Voided' : 'Pending'}</span> <span class="small muted">${esc(PKIND[x.kind] || x.kind)}${x.paid_on ? ' · ' + esc(fmtD(x.paid_on)) : ''}${!pid && x.package_id ? ' · ' + esc(tname(S.packages[x.package_id]?.teacherId)) + ' ' + refTag(S.packages[x.package_id]) : ''}</span>${!pid && !x.package_id && x.status !== 'void' && pks.length ? ` <select class="paylink" data-pay-link="${esc(x.id)}" aria-label="Link this payment to a teacher"><option value="">Not linked to a teacher</option>${pks.map(p => `<option value="${esc(p.id)}">${esc(payPkgLabel(p))}</option>`).join('')}</select>` : ''}<div class="small muted">${esc(x.method || '')}${x.note ? ' · ' + esc(x.note) : ''}${x.status === 'void' ? ' · <b>Voided:</b> ' + esc(x.void_reason || '') : ''}</div></div><div style="display:flex;gap:4px">${x.status === 'pending' ? `<button class="btn sm" data-pay-mark="${esc(x.id)}">Mark paid</button>` : ''}${x.status !== 'void' ? `<button class="btn sm danger" data-pay-void="${esc(x.id)}">Void</button>` : ''}</div></div>`).join('') : '<div class="empty small">No payments recorded.</div>'}</div>
+   <div class="card" style="padding:4px 12px">${list.length ? list.map(x => `<div class="payrow ${x.status === 'void' ? 'void' : ''}"><div><b>${esc(kd(x.amount))}</b> <span class="pill ${x.status === 'paid' ? 'ok' : x.status === 'void' ? '' : 'warn'}">${x.status === 'paid' ? 'Paid' : x.status === 'void' ? 'Voided' : 'Pending'}</span> <span class="small muted">${esc(PKIND[x.kind] || x.kind)}${x.paid_on ? ' · ' + esc(fmtD(x.paid_on)) : ''}${!pid && x.package_id ? ' · ' + esc(tname(S.packages[x.package_id]?.teacherId)) + ' ' + refTag(S.packages[x.package_id]) : ''}</span>${!pid && !x.package_id && x.status !== 'void' && pks.length ? ` <select class="paylink" data-pay-link="${esc(x.id)}" aria-label="Link this payment to a teacher"><option value="">Not linked to a teacher</option>${pks.map(p => `<option value="${esc(p.id)}">${esc(payPkgLabel(p))}</option>`).join('')}</select>` : ''}<div class="small muted">${esc(x.method || '')}${x.note ? ' · ' + esc(x.note) : ''}${x.status === 'void' ? ' · <b>Voided:</b> ' + esc(x.void_reason || '') : ''}</div></div><div style="display:flex;gap:4px"><button class="btn sm" data-pay-receipt="${esc(x.id)}">Receipt</button>${x.status === 'pending' ? `<button class="btn sm" data-pay-mark="${esc(x.id)}">Mark paid</button>` : ''}${x.status !== 'void' ? `<button class="btn sm danger" data-pay-void="${esc(x.id)}">Void</button>` : ''}</div></div>`).join('') : '<div class="empty small">No payments recorded.</div>'}</div>
    <div class="payadd"><input type="number" min="0" step="0.001" id="payAmt" placeholder="Amount (KD)" aria-label="Amount"><input type="text" id="payMethod" list="payMethods" placeholder="Method" aria-label="Method"><datalist id="payMethods">${METHODS.map(m => `<option value="${esc(m)}">`).join('')}</datalist>
     <select id="payKind" aria-label="For">${Object.entries(PKIND).map(([k, v]) => `<option value="${k}" ${k === (pid || defPk ? 'package' : 'book') ? 'selected' : ''}>${v}</option>`).join('')}</select>
     ${pid ? '' : `<select id="payPkg" aria-label="Teacher / package"><option value="">No teacher (e.g. book)</option>${pks.map(p => `<option value="${esc(p.id)}" ${p === defPk ? 'selected' : ''}>${esc(payPkgLabel(p))}</option>`).join('')}</select>`}
@@ -633,7 +642,7 @@ function wirePayments() {
 function renderPayments() {
   const f = S.payFilter; const q = f.q.trim().toLowerCase();
   const all = S.payments;
-  const list = all.filter(x => (f.status === 'void' || x.status !== 'void') && (f.method === 'all' || (x.method || '—') === f.method) && (f.status === 'all' || x.status === f.status) && (!q || (sname(x.student_id) + ' ' + x.note + ' ' + x.method + ' ' + pkgRef(S.packages[x.package_id])).toLowerCase().includes(q)));
+  const list = all.filter(x => (f.status === 'void' || x.status !== 'void') && (f.method === 'all' || (x.method || '—') === f.method) && (f.status === 'all' || x.status === f.status) && (!q || (sname(x.student_id) + ' ' + x.note + ' ' + x.method + ' ' + pkgRef(S.packages[x.package_id]) + ' ' + rcptNo(x)).toLowerCase().includes(q)));
   const paid = all.filter(x => x.status === 'paid'); const pend = all.filter(x => x.status === 'pending');
   const total = a => a.reduce((s, x) => s + Number(x.amount), 0);
   const byMethod = {}; for (const x of paid) byMethod[x.method || '—'] = (byMethod[x.method || '—'] || 0) + Number(x.amount);
@@ -657,7 +666,7 @@ function renderPayments() {
    <select id="ym" aria-label="Method"><option value="all">Any method</option>${[...new Set(all.map(x => x.method || '—'))].sort().map(m => `<option ${f.method === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>
    <select id="ys" aria-label="Status"><option value="all">Paid and pending</option><option value="paid" ${f.status === 'paid' ? 'selected' : ''}>Paid</option><option value="pending" ${f.status === 'pending' ? 'selected' : ''}>Pending</option><option value="void" ${f.status === 'void' ? 'selected' : ''}>Voided</option></select>
    <span class="muted small">${list.length} payments · ${esc(kd(total(list.filter(x => x.status === 'paid'))))}</span></div>
-  <div class="tbl-wrap"><table><thead><tr><th>Student</th><th>Amount</th><th>For</th><th>Method</th><th>Status</th><th>Note</th></tr></thead><tbody>${list.map(x => `<tr ${x.package_id ? `data-open-pkg="${esc(x.package_id)}"` : `data-open-stu="${esc(x.student_id)}"`}><td><b>${esc(sname(x.student_id))}</b>${x.package_id ? `<div class="small muted">${esc(tname(S.packages[x.package_id]?.teacherId))} ${refTag(S.packages[x.package_id])}</div>` : ''}</td><td class="num">${esc(kd(x.amount))}</td><td>${esc(PKIND[x.kind] || x.kind)}</td><td class="small">${esc(x.method || '—')}</td><td><span class="pill ${x.status === 'paid' ? 'ok' : x.status === 'void' ? '' : 'warn'}">${x.status === 'paid' ? 'Paid' : x.status === 'void' ? 'Voided' : 'Pending'}</span></td><td class="small muted">${esc(x.note || '')}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">No payments match.</td></tr>'}</tbody></table></div>`;
+  <div class="tbl-wrap"><table><thead><tr><th>Student</th><th>Amount</th><th>For</th><th>Method</th><th>Status</th><th>Note</th><th></th></tr></thead><tbody>${list.map(x => `<tr ${x.package_id ? `data-open-pkg="${esc(x.package_id)}"` : `data-open-stu="${esc(x.student_id)}"`}><td><b>${esc(sname(x.student_id))}</b>${x.package_id ? `<div class="small muted">${esc(tname(S.packages[x.package_id]?.teacherId))} ${refTag(S.packages[x.package_id])}</div>` : ''}</td><td class="num">${esc(kd(x.amount))}</td><td>${esc(PKIND[x.kind] || x.kind)}</td><td class="small">${esc(x.method || '—')}</td><td><span class="pill ${x.status === 'paid' ? 'ok' : x.status === 'void' ? '' : 'warn'}">${x.status === 'paid' ? 'Paid' : x.status === 'void' ? 'Voided' : 'Pending'}</span></td><td class="small muted">${esc(x.note || '')}</td><td><button class="btn sm" data-pay-receipt="${esc(x.id)}" title="Receipt ${esc(rcptNo(x))}">Receipt</button></td></tr>`).join('') || '<tr><td colspan="7" class="empty">No payments match.</td></tr>'}</tbody></table></div>`;
   $('#yq').oninput = e => { f.q = e.target.value; const pos = e.target.selectionStart; render(); const el = $('#yq'); el.focus(); el.setSelectionRange(pos, pos); };
   $('#ym').onchange = e => { f.method = e.target.value; render(); };
   $('#ys').onchange = e => { f.status = e.target.value; render(); };
@@ -971,6 +980,22 @@ function drawModal() {
   if (kind === 'confirm') {
     shell('Please confirm', '', `<p style="margin:0">${esc(ctx.msg)}</p><div class="row-end">${ctx.onYes ? cancel + `<button class="btn primary" id="mYes">${esc(ctx.yesLabel || 'Confirm')}</button>` : '<button class="btn primary" data-mcancel>OK</button>'}</div>`, true);
     if (ctx.onYes) $('#mYes').onclick = async () => { const f = ctx.onYes; backFromModal(); try { await f(); } catch (e) { /* toast shown */ } };
+  } else if (kind === 'receipt') {
+    const x = S.payments.find(y => y.id === ctx.payId); if (!x) { backFromModal(); return; }
+    const p = S.packages[x.package_id]; const stu = S.students[x.student_id];
+    const st = x.status === 'paid' ? ['Paid', 'ok'] : x.status === 'void' ? ['Voided', 'bad'] : ['Pending', 'warn'];
+    const row = (k, v) => v ? `<div class="rrow"><span>${esc(k)}</span><b>${v}</b></div>` : '';
+    shell('Payment receipt', '', `<div class="receipt ${x.status === 'void' ? 'void' : ''}" id="rcpt">
+      <div class="rhead"><img src="/brand/aria-gold@2x.png" alt="${esc(S.settings.schoolName || 'Aria Music Academy')}" class="rlogo"><div style="text-align:right"><div class="eyebrow">${x.status === 'paid' ? 'Payment receipt' : x.status === 'void' ? 'Voided receipt' : 'Payment due'}</div><div class="rno">${esc(rcptNo(x))}</div><div class="small muted">${esc(fmtLong(x.paid_on || String(x.created_at || '').slice(0, 10) || kwToday()))}</div></div></div>
+      <div class="ramt"><span>${esc(kd(x.amount))}</span><span class="pill ${st[1]}">${st[0]}</span></div>
+      ${row('Student', esc(sname(x.student_id)))}${row('Parent / Guardian', esc(stu?.guardian || ''))}
+      ${row('For', esc(PKIND[x.kind] || x.kind))}
+      ${p ? row('Package ref', `<span class="ref">${esc(pkgRef(p))}</span>`) + row('Teacher', esc(tname(p.teacherId))) + row('Package', esc(`${KINDS[p.kind] || p.kind}${p.subject ? ' · ' + p.subject : ''}${p.term ? ' · ' + p.term : ''}`)) + row('Lessons', esc(`${p.sessions} lessons · ${p.perWeek || 1}× a week`)) + row('Dates', esc(p.start || p.end ? `${p.start ? fmtLong(p.start) : ''} → ${p.end ? fmtLong(p.end) : 'no end date'}` : '')) : ''}
+      ${row('Method', esc(x.method || ''))}${row('Note', esc(x.note || ''))}${x.status === 'void' ? row('Voided', esc(x.void_reason || '')) : ''}
+      <div class="rfoot small muted">${esc(S.settings.schoolName || 'Aria Music Academy')} · Issued ${esc(fmtLong(kwToday()))}</div></div>
+     <div class="row-end">${cancel.replace('Cancel', 'Close')}<button class="btn" id="rCopy">Copy for WhatsApp</button><button class="btn primary" id="rPrint">Print or save PDF</button></div>`, true);
+    $('#rPrint').onclick = () => window.print();
+    $('#rCopy').onclick = async () => { try { await navigator.clipboard.writeText(receiptText(x)); toast('Receipt copied. Paste it into WhatsApp.'); } catch { toast('Could not copy. Select the receipt text instead.'); } };
   } else if (kind === 'correct') {
     const p = S.packages[ctx.pid]; const e = (p?.log || []).find(x => x.id === ctx.lessonId); if (!e) { backFromModal(); return; }
     const opts2 = Object.entries(ST).map(([k, v]) => `<option value="${k}" ${(ctx.status || e.s) === k ? 'selected' : ''}>${esc(v.label)}</option>`).join('');
@@ -1104,8 +1129,9 @@ function drawModal() {
 /* ---------- global click delegation ---------- */
 document.addEventListener('click', async e => {
   if (e.target.closest('a.pbtn')) return;
-  const t = e.target.closest('[data-open-pkg],[data-open-stu],[data-mark],[data-new-pkg],[data-goto-date],[data-add-slot],[data-edit-slot],[data-close]'); if (!t) return;
+  const t = e.target.closest('[data-pay-receipt],[data-open-pkg],[data-open-stu],[data-mark],[data-new-pkg],[data-goto-date],[data-add-slot],[data-edit-slot],[data-close]'); if (!t) return;
   if (t.hasAttribute('data-close')) return closeOverlay();
+  if (t.dataset.payReceipt) { e.preventDefault(); e.stopPropagation(); return openModal('receipt', { payId: t.dataset.payReceipt }); }
   if (t.dataset.openPkg) { e.preventDefault(); return openDrawer('package', t.dataset.openPkg); }
   if (t.dataset.openStu) { e.preventDefault(); return openDrawer('student', t.dataset.openStu); }
   if (t.dataset.newPkg) { const [sid, tid] = t.dataset.newPkg.split('|'); return openModal('newpkg', { studentId: sid, teacherId: tid }); }
@@ -1145,8 +1171,8 @@ async function exportXlsxInner() {
   const st = [['Student', 'Parent / Guardian', 'Phone', 'Registration form', 'Notes', 'Archived']];
   for (const id of studentIds(true)) { const s = S.students[id]; st.push([s.name, s.guardian || '', s.phone || '', FORM[s.regForm]?.[0] || '', s.notes || '', s.archived ? 'Yes' : '']); }
   X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(st), 'Students');
-  const pays = [['Student', 'Package ref', 'Teacher', 'Amount (KD)', 'For', 'Method', 'Status', 'Paid on', 'Note', 'Void reason']];
-  for (const x of S.payments) pays.push([sname(x.student_id), pkgRef(S.packages[x.package_id]), x.package_id ? tname(S.packages[x.package_id]?.teacherId) : '', x.status === 'void' ? 0 : Number(x.amount), PKIND[x.kind] || x.kind, x.method || '', ({ paid: 'Paid', pending: 'Pending', void: `Voided (was ${x.amount} KD)` })[x.status] || x.status, x.paid_on || '', x.note || '', x.void_reason || '']);
+  const pays = [['Receipt', 'Student', 'Package ref', 'Teacher', 'Amount (KD)', 'For', 'Method', 'Status', 'Paid on', 'Note', 'Void reason']];
+  for (const x of S.payments) pays.push([rcptNo(x), sname(x.student_id), pkgRef(S.packages[x.package_id]), x.package_id ? tname(S.packages[x.package_id]?.teacherId) : '', x.status === 'void' ? 0 : Number(x.amount), PKIND[x.kind] || x.kind, x.method || '', ({ paid: 'Paid', pending: 'Pending', void: `Voided (was ${x.amount} KD)` })[x.status] || x.status, x.paid_on || '', x.note || '', x.void_reason || '']);
   X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(pays), 'Payments');
   X.writeFile(wb, `studio-${kwToday()}.xlsx`);
   sb.rpc('log_event', { p_action: 'EXPORT', p_detail: { file: `studio-${kwToday()}.xlsx`, packages: pkgList().length } }).then(() => {}, () => {});

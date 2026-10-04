@@ -254,3 +254,26 @@ th{letter-spacing:.14em}
 .tgroup h3 .ava{margin-right:2px}
 .tchip .ava{margin-left:-4px}
 .photoblock{display:flex;align-items:center;gap:14px}
+/* payment receipt */
+.receipt{background:#fffdf8;color:#2a1a2e;border:1px solid var(--line);border-radius:10px;padding:18px 20px;display:flex;flex-direction:column;gap:2px}
+.receipt .eyebrow{color:#8a6a1f}
+.receipt .muted{color:#6f6475}
+.rhead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding-bottom:12px;border-bottom:2px solid #c9a24a;margin-bottom:10px}
+.rlogo{height:46px;width:auto}
+.rno{font-family:var(--f-mono);font-weight:700;font-size:17px;letter-spacing:.02em}
+.ramt{display:flex;align-items:center;justify-content:space-between;gap:10px;font-family:var(--f-display);font-size:30px;padding:4px 0 10px}
+.rrow{display:flex;justify-content:space-between;gap:14px;padding:6px 0;border-top:1px solid #eee3d3;font-size:14px}
+.rrow span{color:#6f6475}
+.rrow b{font-weight:600;text-align:right}
+.receipt .ref{background:#f3ece0;color:#2a1a2e;border-color:#e2d6c2}
+.rfoot{margin-top:12px;padding-top:10px;border-top:1px solid #eee3d3;text-align:center}
+.receipt.void .ramt span:first-child{text-decoration:line-through;opacity:.6}
+@media print{
+  body *{visibility:hidden!important}
+  #rcpt,#rcpt *{visibility:visible!important}
+  #rcpt{position:fixed;left:0;top:0;width:100%;border:0;border-radius:0;padding:24px 32px;box-shadow:none}
+  .scrim{background:none!important}
+  html,body{background:#fff!important}
+  #rcpt{background:#fff}
+  @page{margin:14mm}
+}
