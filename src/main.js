@@ -874,6 +874,61 @@ function shell(title, sub, body, isModal) {
 $('#overlay').addEventListener('mousedown', e => { if (e.target.hasAttribute('data-scrim')) closeOverlay(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && drawer) closeOverlay(); });
 
+/* ---------- attendance report for parents (PDF) ---------- */
+// Plain words for parents: what happened, and whether it used a lesson from the package.
+const PARENT_ST = {
+  present: ['Attended', 'ok', 'Uses 1 lesson'], makeup: ['Makeup lesson', 'blue', 'Uses 1 lesson'],
+  absent: ['Absent', 'warn', 'Not charged · makeup owed'], cancelled: ['Cancelled by teacher', 'vio', 'Not charged · makeup owed'],
+  noshow: ['Missed without notice', 'bad', 'Uses 1 lesson'],
+};
+function reportPkgHtml(p) {
+  const today = kwToday(); const st = stats(p); const log = (p.log || []).slice().sort((a, b) => a.d.localeCompare(b.d));
+  const done = log.filter(e => e.d <= today), ahead = log.filter(e => e.d > today);
+  const usedSoFar = done.filter(e => ST[e.s]?.counts).length, booked = ahead.filter(e => ST[e.s]?.counts).length;
+  const slots = slotsOf(p.teacherId).filter(x => x.studentId === p.studentId).sort((a, b) => a.day - b.day || toMin(a.start) - toMin(b.start));
+  const sched = slots.map(x => `${DAYS[x.day]} ${fmtTs(x.start)}–${fmtT(toMin(x.start) + x.dur)}`).join(' · ');
+  const timeOf = e => { if (e.t) return `${fmtTs(e.t)}–${fmtT(toMin(e.t) + (e.du || defDur(p.studentId, p.teacherId)))}`; const sl = slots.find(x => x.day === wd(e.d)); return sl ? `${fmtTs(sl.start)}–${fmtT(toMin(sl.start) + sl.dur)}` : ''; };
+  let n = 0;
+  const rows = log.map(e => { const ps = PARENT_ST[e.s] || [e.s, '', '']; const counts = ST[e.s]?.counts; if (counts) n++; const fut = e.d > today;
+    return `<tr class="${fut ? 'fut' : ''}"><td class="rn">${counts ? n : ''}</td><td>${esc(fmtD(e.d, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }))}</td><td class="rt">${esc(timeOf(e))}</td><td><span class="rb ${ps[1]}">${esc(ps[0])}</span>${fut ? ' <span class="rup">upcoming</span>' : ''}</td><td class="rc">${esc(ps[2])}</td></tr>`; }).join('');
+  const pct = st.total ? Math.min(100, Math.round(st.used / st.total * 100)) : 0;
+  const tile = (v, l, cls = '') => `<div class="rtile ${cls}"><b>${v}</b><span>${l}</span></div>`;
+  return `<section class="rpkg">
+    <div class="rpkg-h"><div><div class="rteacher">${esc(tname(p.teacherId))}${p.subject ? ` <span>· ${esc(p.subject)}</span>` : ''}</div>
+      <div class="rmeta">${esc(KINDS[p.kind] || p.kind)} package${p.term ? ' · ' + esc(p.term) : ''}${p.start || p.end ? ` · ${p.start ? esc(fmtLong(p.start)) : ''} → ${p.end ? esc(fmtLong(p.end)) : 'no end date'}` : ''}</div>
+      ${sched ? `<div class="rmeta">Weekly lessons: ${esc(sched)}</div>` : ''}</div><div class="rref">${esc(pkgRef(p))}${p.closed ? '<div class="rclosed">Closed</div>' : ''}</div></div>
+    <div class="rtiles">${tile(st.total, 'lessons in package')}${tile(usedSoFar, 'used so far')}${booked ? tile(booked, 'booked ahead') : ''}${tile(Math.max(0, st.left), 'remaining', st.left <= 0 ? 'bad' : '')}${tile(st.owed, st.owed === 1 ? 'makeup owed' : 'makeups owed', st.owed ? 'vio' : '')}</div>
+    <div class="rbar"><i style="width:${pct}%"></i></div><div class="rbar-l">${st.used} of ${st.total} lessons used${st.used > st.total ? ` · <b style="color:#a3332c">${st.used - st.total} over the package</b>` : ''}</div>
+    ${log.length ? `<table class="rtab"><thead><tr><th>#</th><th>Date</th><th>Time</th><th>What happened</th><th>Package</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="rempty">No lessons recorded yet.</p>'}
+  </section>`;
+}
+function reportHtml(sid, pkgIds) {
+  const stu = S.students[sid]; const school = S.settings.schoolName || 'Aria Music Academy';
+  const pks = pkgIds.map(id => ({ id, ...S.packages[id] })).filter(p => p.studentId);
+  return `<div class="areport" id="areport">
+    <header class="rhd"><img src="/brand/aria-gold@2x.png" alt="${esc(school)}"><div><div class="rtitle">Attendance report</div><div class="rsub">Issued ${esc(fmtLong(kwToday()))}</div></div></header>
+    <div class="rstu"><div><div class="rlabel">Student</div><div class="rname">${esc(sname(sid))}</div></div>${stu?.guardian ? `<div><div class="rlabel">Parent / Guardian</div><div class="rval">${esc(stu.guardian)}</div></div>` : ''}<div><div class="rlabel">Report date</div><div class="rval">${esc(fmtLong(kwToday()))}</div></div></div>
+    ${pks.map(reportPkgHtml).join('') || '<p class="rempty">No packages to show.</p>'}
+    <div class="rkey"><div class="rlabel">What each mark means</div><div class="rkeys">${Object.values(PARENT_ST).map(([l, c, d]) => `<div><span class="rb ${c}">${esc(l)}</span> ${esc(d)}</div>`).join('')}</div>
+      <p>A makeup is owed when a lesson is missed with notice or cancelled by the teacher. Makeup lessons replace those lessons and then count towards the package.</p>
+      <div class="rthanks">Thank you for learning with ${esc(school)}</div></div></div>`;
+}
+async function downloadReport(sid, name) {
+  const el = $('#areport'); if (!el) return; const btn = $('#rDl'); if (btn) { btn.disabled = true; btn.textContent = 'Making PDF…'; }
+  try {
+    await document.fonts?.ready;
+    const html2pdf = (await import('html2pdf.js')).default;
+    let canvas, size;
+    await html2pdf().set({ margin: [0, 0, 12, 0], filename: name, image: { type: 'jpeg', quality: 0.95 }, html2canvas: { scale: 2, useCORS: true, backgroundColor: '#fffdf8', windowWidth: 794 }, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }, pagebreak: { mode: ['css', 'legacy'], avoid: ['tr', '.rtiles', '.rpkg-h', '.rkey'] } })
+      .from(el).toPdf().get('canvas').then(c => { canvas = c; }).get('pageSize').then(ps => { size = ps; }).get('pdf').then(pdf => {
+        // html2pdf can leave an empty last page; keep only the pages the content actually fills.
+        const pagePx = Math.floor(canvas.width * size.inner.height / size.inner.width); const need = Math.max(1, Math.ceil((canvas.height - 36) / pagePx)); // the last 18px is the report's bottom margin
+        while (pdf.internal.getNumberOfPages() > need) pdf.deletePage(pdf.internal.getNumberOfPages());
+        const n = pdf.internal.getNumberOfPages(); for (let i = 1; i <= n; i++) { pdf.setPage(i); pdf.setFontSize(8); pdf.setTextColor(120, 100, 110); pdf.setDrawColor(201, 162, 63); pdf.setLineWidth(0.4); pdf.line(12, 287, 198, 287); pdf.text(`${S.settings.schoolName || 'Aria Music Academy'} · ${sname(sid)} · Attendance report`, 12, 292); pdf.text(`Page ${i} of ${n}`, 198, 292, { align: 'right' }); } }).save();
+    sb.rpc('log_event', { p_action: 'EXPORT', p_detail: { file: name, student_id: sid } }).then(() => {}, () => {});
+  } catch (e) { console.error(e); toast('Could not make the PDF. Try Print → Save as PDF instead.'); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = 'Download PDF'; } }
+}
 function drawPackage(id) {
   const p = S.packages[id]; if (!p) { closeOverlay(); return; }
   const s = stats(p); const A = isAdmin(); const dis = A ? '' : 'disabled';
@@ -883,6 +938,7 @@ function drawPackage(id) {
    <div class="namecell" style="gap:10px">${avatar('student', p.studentId, 44)}${avatar('teacher', p.teacherId, 32)}</div>
    ${p.closed ? '<div class="infobox">This package is closed. It is kept for history.</div>' : s.used > s.total ? `<div class="badbox">${s.used - s.total} lesson(s) used beyond the package. Renew and move the extra lessons, or adjust the size.</div>` : s.state === 'finished' ? '<div class="badbox">All lessons used. Renew to keep marking attendance.</div>' : ''}
    ${s.ended ? `<div class="warnbox">This package's end date (${esc(fmtD(p.end))}) has passed${s.left > 0 ? ` with ${s.left} lessons not used` : ''}. Renew or close it.</div>` : ''}
+   <div class="row-end" style="justify-content:flex-start;margin-bottom:-4px"><button class="btn sm" data-att-report="${esc(p.studentId)}|${esc(id)}">📄 Attendance report for parents</button></div>
    <div class="stats"><div class="stat"><b>${s.used}</b><span>used of ${s.total}</span></div><div class="stat"><b style="color:${s.left <= 0 ? 'var(--bad)' : s.state === 'low' ? 'var(--warn)' : 'inherit'}">${s.left}</b><span>left</span></div><div class="stat"><b>${s.owed}</b><span>makeups owed</span></div><div class="stat"><b>${s.c.absent + s.c.cancelled}</b><span>missed</span></div></div>
    <div class="sect"><h3>Lessons <span class="muted small" style="font-weight:400">${(p.log || []).length} logged${s.last ? ' · last ' + esc(fmtD(s.last)) : ''}</span></h3>
     <div class="card" style="padding:4px 12px"><div class="loglist">${log || '<div class="empty small">No lessons logged yet.</div>'}</div></div>
@@ -951,7 +1007,7 @@ function drawStudent(id) {
   const pk = pkgList().filter(p => p.studentId === id).sort((a, b) => (a.closed - b.closed) || (b.start || '').localeCompare(a.start || ''));
   shell(s.name, s.archived ? 'Archived' : '', `
    ${photoBlock('student', id)}
-   <div class="sect"><h3>Lessons</h3>${studentSummary(id)}</div>
+   <div class="sect"><h3>Lessons${pkgList().some(p => p.studentId === id) ? `<button class="btn sm" style="margin-left:auto" data-att-report="${esc(id)}|">📄 Attendance report</button>` : ''}</h3>${studentSummary(id)}</div>
    <div class="grid2">
     <label class="f">Name<input type="text" id="sN" value="${esc(s.name)}" ${dis}></label>
     <label class="f">Parent / Guardian<input type="text" id="sG" value="${esc(s.guardian || '')}" ${dis}></label>
@@ -980,6 +1036,17 @@ function drawModal() {
   if (kind === 'confirm') {
     shell('Please confirm', '', `<p style="margin:0">${esc(ctx.msg)}</p><div class="row-end">${ctx.onYes ? cancel + `<button class="btn primary" id="mYes">${esc(ctx.yesLabel || 'Confirm')}</button>` : '<button class="btn primary" data-mcancel>OK</button>'}</div>`, true);
     if (ctx.onYes) $('#mYes').onclick = async () => { const f = ctx.onYes; backFromModal(); try { await f(); } catch (e) { /* toast shown */ } };
+  } else if (kind === 'report') {
+    const all = payPkgs(ctx.sid); if (!ctx.pids.length && all.length) ctx.pids = [all[0].id];
+    const fname = `Attendance - ${sname(ctx.sid)} - ${kwToday()}.pdf`.replace(/[\\/:*?"<>|]/g, '');
+    shell('Attendance report', '', `<p class="small muted" style="margin:0">A report for ${esc(sname(ctx.sid))}'s parents. Download it as a PDF to send on WhatsApp or email.</p>
+      ${all.length > 1 ? `<div class="rpick">${all.map(p => `<label><input type="checkbox" data-rp="${esc(p.id)}" ${ctx.pids.includes(p.id) ? 'checked' : ''}> <span class="ref">${esc(pkgRef(p))}</span> ${esc(tname(p.teacherId))} · ${esc(KINDS[p.kind] || p.kind)}${p.term ? ' · ' + esc(p.term) : ''}${p.closed ? ' <span class="muted">(closed)</span>' : ''}</label>`).join('')}</div>` : ''}
+      <div class="rprev">${reportHtml(ctx.sid, ctx.pids)}</div>
+      <div class="row-end">${cancel.replace('Cancel', 'Close')}<button class="btn" id="rPr">Print</button><button class="btn primary" id="rDl">Download PDF</button></div>`, true);
+    $('#overlay .modal').classList.add('wide');
+    document.querySelectorAll('[data-rp]').forEach(cb => cb.onchange = () => { ctx.pids = all.filter(p => document.querySelector(`[data-rp="${CSS.escape(p.id)}"]`).checked).map(p => p.id); $('.rprev').innerHTML = reportHtml(ctx.sid, ctx.pids); });
+    $('#rDl').onclick = () => ctx.pids.length ? downloadReport(ctx.sid, fname) : toast('Tick at least one package');
+    $('#rPr').onclick = () => window.print();
   } else if (kind === 'receipt') {
     const x = S.payments.find(y => y.id === ctx.payId); if (!x) { backFromModal(); return; }
     const p = S.packages[x.package_id]; const stu = S.students[x.student_id];
@@ -1129,8 +1196,9 @@ function drawModal() {
 /* ---------- global click delegation ---------- */
 document.addEventListener('click', async e => {
   if (e.target.closest('a.pbtn')) return;
-  const t = e.target.closest('[data-pay-receipt],[data-open-pkg],[data-open-stu],[data-mark],[data-new-pkg],[data-goto-date],[data-add-slot],[data-edit-slot],[data-close]'); if (!t) return;
+  const t = e.target.closest('[data-att-report],[data-pay-receipt],[data-open-pkg],[data-open-stu],[data-mark],[data-new-pkg],[data-goto-date],[data-add-slot],[data-edit-slot],[data-close]'); if (!t) return;
   if (t.hasAttribute('data-close')) return closeOverlay();
+  if (t.dataset.attReport) { const [sid, pid] = t.dataset.attReport.split('|'); return openModal('report', { sid, pids: pid ? [pid] : payPkgs(sid).filter(p => !p.closed).map(p => p.id) }); }
   if (t.dataset.payReceipt) { e.preventDefault(); e.stopPropagation(); return openModal('receipt', { payId: t.dataset.payReceipt }); }
   if (t.dataset.openPkg) { e.preventDefault(); return openDrawer('package', t.dataset.openPkg); }
   if (t.dataset.openStu) { e.preventDefault(); return openDrawer('student', t.dataset.openStu); }
