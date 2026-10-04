@@ -598,13 +598,18 @@ function renderSetup() {
 const PKIND = { package: 'Package', book: 'Book', trial: 'Trial lesson', single: 'Single session', other: 'Other' };
 const METHODS = ['Company account (link)', 'KNET machine', 'Paid to Ms. Chaimaa', 'Paid to Ms. Nilufar', 'Cash', 'Bank transfer'];
 const kd = n => `${Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 3 })} KD`;
+// Packages a student's payment can belong to (which is what ties it to a teacher), open ones first.
+const payPkgs = sid => pkgList().filter(p => p.studentId === sid).sort((a, b) => (a.closed - b.closed) || (b.start || '').localeCompare(a.start || ''));
+const payPkgLabel = p => `${tname(p.teacherId)} · ${KINDS[p.kind] || p.kind}${p.term ? ' · ' + p.term : ''}${p.closed ? ' (closed)' : ''}`;
 function paymentsSect(list, sid, pid) {
+  const pks = pid ? [] : payPkgs(sid); const defPk = pks.find(p => !p.closed);
   const paid = list.filter(x => x.status === 'paid').reduce((a, x) => a + Number(x.amount), 0);
   const pend = list.filter(x => x.status === 'pending').reduce((a, x) => a + Number(x.amount), 0);
   return `<div class="sect" id="paySect"><h3>Payments <span class="muted small" style="font-weight:400">${kd(paid)} paid${pend ? ` · ${kd(pend)} pending` : ''}</span></h3>
-   <div class="card" style="padding:4px 12px">${list.length ? list.map(x => `<div class="payrow ${x.status === 'void' ? 'void' : ''}"><div><b>${esc(kd(x.amount))}</b> <span class="pill ${x.status === 'paid' ? 'ok' : x.status === 'void' ? '' : 'warn'}">${x.status === 'paid' ? 'Paid' : x.status === 'void' ? 'Voided' : 'Pending'}</span> <span class="small muted">${esc(PKIND[x.kind] || x.kind)}${x.paid_on ? ' · ' + esc(fmtD(x.paid_on)) : ''}${!pid && x.package_id ? ' · ' + esc(tname(S.packages[x.package_id]?.teacherId)) : ''}</span><div class="small muted">${esc(x.method || '')}${x.note ? ' · ' + esc(x.note) : ''}${x.status === 'void' ? ' · <b>Voided:</b> ' + esc(x.void_reason || '') : ''}</div></div><div style="display:flex;gap:4px">${x.status === 'pending' ? `<button class="btn sm" data-pay-mark="${esc(x.id)}">Mark paid</button>` : ''}${x.status !== 'void' ? `<button class="btn sm danger" data-pay-void="${esc(x.id)}">Void</button>` : ''}</div></div>`).join('') : '<div class="empty small">No payments recorded.</div>'}</div>
+   <div class="card" style="padding:4px 12px">${list.length ? list.map(x => `<div class="payrow ${x.status === 'void' ? 'void' : ''}"><div><b>${esc(kd(x.amount))}</b> <span class="pill ${x.status === 'paid' ? 'ok' : x.status === 'void' ? '' : 'warn'}">${x.status === 'paid' ? 'Paid' : x.status === 'void' ? 'Voided' : 'Pending'}</span> <span class="small muted">${esc(PKIND[x.kind] || x.kind)}${x.paid_on ? ' · ' + esc(fmtD(x.paid_on)) : ''}${!pid && x.package_id ? ' · ' + esc(tname(S.packages[x.package_id]?.teacherId)) : ''}</span>${!pid && !x.package_id && x.status !== 'void' && pks.length ? ` <select class="paylink" data-pay-link="${esc(x.id)}" aria-label="Link this payment to a teacher"><option value="">Not linked to a teacher</option>${pks.map(p => `<option value="${esc(p.id)}">${esc(payPkgLabel(p))}</option>`).join('')}</select>` : ''}<div class="small muted">${esc(x.method || '')}${x.note ? ' · ' + esc(x.note) : ''}${x.status === 'void' ? ' · <b>Voided:</b> ' + esc(x.void_reason || '') : ''}</div></div><div style="display:flex;gap:4px">${x.status === 'pending' ? `<button class="btn sm" data-pay-mark="${esc(x.id)}">Mark paid</button>` : ''}${x.status !== 'void' ? `<button class="btn sm danger" data-pay-void="${esc(x.id)}">Void</button>` : ''}</div></div>`).join('') : '<div class="empty small">No payments recorded.</div>'}</div>
    <div class="payadd"><input type="number" min="0" step="0.001" id="payAmt" placeholder="Amount (KD)" aria-label="Amount"><input type="text" id="payMethod" list="payMethods" placeholder="Method" aria-label="Method"><datalist id="payMethods">${METHODS.map(m => `<option value="${esc(m)}">`).join('')}</datalist>
-    <select id="payKind" aria-label="For">${Object.entries(PKIND).map(([k, v]) => `<option value="${k}" ${k === (pid ? 'package' : 'book') ? 'selected' : ''}>${v}</option>`).join('')}</select>
+    <select id="payKind" aria-label="For">${Object.entries(PKIND).map(([k, v]) => `<option value="${k}" ${k === (pid || defPk ? 'package' : 'book') ? 'selected' : ''}>${v}</option>`).join('')}</select>
+    ${pid ? '' : `<select id="payPkg" aria-label="Teacher / package"><option value="">No teacher (e.g. book)</option>${pks.map(p => `<option value="${esc(p.id)}" ${p === defPk ? 'selected' : ''}>${esc(payPkgLabel(p))}</option>`).join('')}</select>`}
     <select id="payStatus" aria-label="Status"><option value="paid">Paid</option><option value="pending">Pending</option></select>
     <input type="date" id="payOn" value="${kwToday()}" aria-label="Date"><input type="text" id="payNote" placeholder="Note" aria-label="Note">
     <button class="btn sm primary" id="payAdd" data-sid="${esc(sid)}" data-pid="${esc(pid || '')}">Add payment</button></div></div>`;
@@ -613,12 +618,13 @@ function wirePayments() {
   const ov = $('#overlay');
   ov.querySelectorAll('[data-pay-void]').forEach(b => b.onclick = () => { const x = S.payments.find(y => y.id === b.dataset.payVoid); reasonBox({ title: 'Void payment', msg: `Void the ${kd(x?.amount)} payment from ${sname(x?.student_id)}? It stays on record, crossed out, and stops counting in totals.`, label: 'Reason (required)', required: true, yes: 'Void payment' }, reason => run(sb.from('payments').update({ status: 'void', void_reason: reason }).eq('id', x.id), 'Payment voided')); });
   ov.querySelectorAll('[data-pay-mark]').forEach(b => b.onclick = () => run(sb.from('payments').update({ status: 'paid', paid_on: S.payments.find(y => y.id === b.dataset.payMark)?.paid_on || kwToday() }).eq('id', b.dataset.payMark), 'Marked as paid').then(() => renderOverlay(true)).catch(() => {}));
+  ov.querySelectorAll('[data-pay-link]').forEach(el => el.onchange = () => { if (el.value) run(sb.from('payments').update({ package_id: el.value }).eq('id', el.dataset.payLink), 'Payment linked to ' + tname(S.packages[el.value]?.teacherId)).then(() => renderOverlay(true)).catch(() => {}); });
   const add = $('#payAdd'); if (!add) return;
   add.onclick = () => {
     if (add.disabled) return;
     const amount = Number($('#payAmt').value); if (!(amount > 0)) return toast('Enter the amount');
     add.disabled = true;
-    const row = { student_id: add.dataset.sid, package_id: add.dataset.pid || null, amount, method: $('#payMethod').value.trim(), kind: $('#payKind').value, status: $('#payStatus').value, paid_on: $('#payOn').value || null, note: $('#payNote').value.trim() };
+    const row = { student_id: add.dataset.sid, package_id: add.dataset.pid || $('#payPkg')?.value || null, amount, method: $('#payMethod').value.trim(), kind: $('#payKind').value, status: $('#payStatus').value, paid_on: $('#payOn').value || null, note: $('#payNote').value.trim() };
     run(sb.from('payments').insert(row), 'Payment recorded').then(() => renderOverlay(true)).catch(() => {}).finally(() => { add.disabled = false; });
   };
 }
