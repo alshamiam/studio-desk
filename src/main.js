@@ -124,6 +124,8 @@ function stats(p) {
   const paidSum = S.payments.filter(x => x.package_id === p.id && x.status === 'paid').reduce((a, x) => a + Number(x.amount), 0);
   return { used, owed, left, total, c, state, last, ended, paidSum };
 }
+const pkgRef = p => p?.ref ? 'PKG-' + String(p.ref).padStart(4, '0') : '';
+const refTag = p => p?.ref ? `<span class="ref">${pkgRef(p)}</span>` : '';
 const pkgList = () => Object.entries(S.packages).map(([id, p]) => ({ id, ...p }));
 const pairPkgs = (sid, tid) => pkgList().filter(p => p.studentId === sid && p.teacherId === tid);
 function pkgForDate(sid, tid, date) {
@@ -201,7 +203,7 @@ async function loadAll() {
   const students = {};
   for (const r of s) students[r.id] = { name: r.name, guardian: r.guardian, phone: r.phone, regForm: r.reg_form, notes: r.notes, archived: r.archived, photo: r.photo };
   const packages = {};
-  for (const r of p) packages[r.id] = { studentId: r.student_id, teacherId: r.teacher_id, subject: r.subject, kind: r.kind, sessions: r.sessions, perWeek: r.per_week, start: r.start_date, end: r.end_date, term: r.term, payment: r.payment, paidNote: r.paid_note, price: r.price, notes: r.notes, closed: r.closed, log: [] };
+  for (const r of p) packages[r.id] = { studentId: r.student_id, teacherId: r.teacher_id, subject: r.subject, kind: r.kind, sessions: r.sessions, perWeek: r.per_week, start: r.start_date, end: r.end_date, term: r.term, payment: r.payment, paidNote: r.paid_note, price: r.price, notes: r.notes, closed: r.closed, ref: r.ref, log: [] };
   for (const r of l) packages[r.package_id]?.log.push({ id: r.id, d: r.lesson_date, s: r.status, n: r.note, t: r.start_time || null, du: r.dur || null });
   for (const k in packages) packages[k].log.sort((a, b) => a.d.localeCompare(b.d));
   Object.assign(S, { teachers, students, packages, profiles: pr || [], payments: pay || [], loaded: true });
@@ -486,11 +488,11 @@ const chips = p => `<div class="chips">${(p.log || []).map(e => `<span class="ch
 function renderPackages() {
   const f = S.pkgFilter; const q = f.q.trim().toLowerCase();
   let list = pkgList().map(p => ({ p, s: stats(p) }));
-  list = list.filter(({ p, s }) => (f.teacher === 'all' || p.teacherId === f.teacher) && (!q || sname(p.studentId).toLowerCase().includes(q)) && (
+  list = list.filter(({ p, s }) => (f.teacher === 'all' || p.teacherId === f.teacher) && (!q || (sname(p.studentId) + ' ' + pkgRef(p)).toLowerCase().includes(q)) && (
     f.state === 'all' || (f.state === 'active' && !p.closed) || (f.state === 'closed' && p.closed) || (f.state === 'attention' && !p.closed && (s.state !== 'active' || s.owed || p.payment !== 'paid' || s.ended)) || (f.state === 'ended' && s.ended) ||
     (f.state === 'owed' && s.owed > 0) || (f.state === 'unpaid' && p.payment !== 'paid' && !p.closed) || (f.state === 'low' && !p.closed && (s.state === 'low' || s.state === 'finished'))));
   list.sort((a, b) => tname(a.p.teacherId).localeCompare(tname(b.p.teacherId)) || sname(a.p.studentId).localeCompare(sname(b.p.studentId)));
-  const rows = list.map(({ p, s }) => `<tr data-open-pkg="${esc(p.id)}"><td><div class="namecell">${avatar('student', p.studentId, 30)}<div><b>${esc(sname(p.studentId))}</b><div class="small muted">${esc(KINDS[p.kind] || p.kind)} · ${p.perWeek || 1}× a week${p.subject ? ' · ' + esc(p.subject) : ''}${p.end ? ` · <span style="${s.ended ? 'color:var(--bad)' : ''}">${s.ended ? 'ended' : 'ends'} ${esc(chipD(p.end))}</span>` : ''}</div></div></div></td>
+  const rows = list.map(({ p, s }) => `<tr data-open-pkg="${esc(p.id)}"><td><div class="namecell">${avatar('student', p.studentId, 30)}<div><b>${esc(sname(p.studentId))}</b><div class="small muted">${refTag(p)} ${esc(KINDS[p.kind] || p.kind)} · ${p.perWeek || 1}× a week${p.subject ? ' · ' + esc(p.subject) : ''}${p.end ? ` · <span style="${s.ended ? 'color:var(--bad)' : ''}">${s.ended ? 'ended' : 'ends'} ${esc(chipD(p.end))}</span>` : ''}</div></div></div></td>
    <td><span class="dot" style="background:${esc(tcolor(p.teacherId))}"></span> ${esc(tname(p.teacherId))}</td><td>${meter(s)}</td>
    <td class="num">${s.left < 0 ? `<span style="color:var(--bad)">${s.left}</span>` : s.left}</td>
    <td>${s.owed ? `<span class="pill vio">${s.owed} owed</span>` : '<span class="muted">–</span>'}</td>
@@ -499,7 +501,7 @@ function renderPackages() {
   $('#view').innerHTML = `
   <div class="bar"><h2>Attendance</h2>${isAdmin() ? '<button class="btn primary" id="newPkg">New package</button>' : ''}</div>
   <div class="filters" style="margin-bottom:12px">
-   <input type="search" id="pq" placeholder="Search student" value="${esc(f.q)}" aria-label="Search student">
+   <input type="search" id="pq" placeholder="Search student or PKG ref" value="${esc(f.q)}" aria-label="Search student or package reference">
    <select id="pt" aria-label="Teacher"><option value="all">All teachers</option>${teacherIds().map(id => `<option value="${esc(id)}" ${f.teacher === id ? 'selected' : ''}>${esc(tname(id))}</option>`).join('')}</select>
    <select id="ps" aria-label="Show">${[['active', 'Open packages'], ['attention', 'Needs attention'], ['low', 'Nearly done or finished'], ['ended', 'End date passed'], ['owed', 'Makeup owed'], ['unpaid', 'Payment outstanding'], ['closed', 'Closed'], ['all', 'Everything']].map(([k, l]) => `<option value="${k}" ${f.state === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
    <span class="muted small">${list.length} package${list.length === 1 ? '' : 's'}</span>${isAdmin() ? '<button class="btn sm" id="exportX" style="margin-left:auto">Export to Excel</button>' : ''}</div>
@@ -600,13 +602,13 @@ const METHODS = ['Company account (link)', 'KNET machine', 'Paid to Ms. Chaimaa'
 const kd = n => `${Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 3 })} KD`;
 // Packages a student's payment can belong to (which is what ties it to a teacher), open ones first.
 const payPkgs = sid => pkgList().filter(p => p.studentId === sid).sort((a, b) => (a.closed - b.closed) || (b.start || '').localeCompare(a.start || ''));
-const payPkgLabel = p => `${tname(p.teacherId)} · ${KINDS[p.kind] || p.kind}${p.term ? ' · ' + p.term : ''}${p.closed ? ' (closed)' : ''}`;
+const payPkgLabel = p => `${pkgRef(p) ? pkgRef(p) + ' · ' : ''}${tname(p.teacherId)} · ${KINDS[p.kind] || p.kind}${p.term ? ' · ' + p.term : ''}${p.closed ? ' (closed)' : ''}`;
 function paymentsSect(list, sid, pid) {
   const pks = pid ? [] : payPkgs(sid); const defPk = pks.find(p => !p.closed);
   const paid = list.filter(x => x.status === 'paid').reduce((a, x) => a + Number(x.amount), 0);
   const pend = list.filter(x => x.status === 'pending').reduce((a, x) => a + Number(x.amount), 0);
   return `<div class="sect" id="paySect"><h3>Payments <span class="muted small" style="font-weight:400">${kd(paid)} paid${pend ? ` · ${kd(pend)} pending` : ''}</span></h3>
-   <div class="card" style="padding:4px 12px">${list.length ? list.map(x => `<div class="payrow ${x.status === 'void' ? 'void' : ''}"><div><b>${esc(kd(x.amount))}</b> <span class="pill ${x.status === 'paid' ? 'ok' : x.status === 'void' ? '' : 'warn'}">${x.status === 'paid' ? 'Paid' : x.status === 'void' ? 'Voided' : 'Pending'}</span> <span class="small muted">${esc(PKIND[x.kind] || x.kind)}${x.paid_on ? ' · ' + esc(fmtD(x.paid_on)) : ''}${!pid && x.package_id ? ' · ' + esc(tname(S.packages[x.package_id]?.teacherId)) : ''}</span>${!pid && !x.package_id && x.status !== 'void' && pks.length ? ` <select class="paylink" data-pay-link="${esc(x.id)}" aria-label="Link this payment to a teacher"><option value="">Not linked to a teacher</option>${pks.map(p => `<option value="${esc(p.id)}">${esc(payPkgLabel(p))}</option>`).join('')}</select>` : ''}<div class="small muted">${esc(x.method || '')}${x.note ? ' · ' + esc(x.note) : ''}${x.status === 'void' ? ' · <b>Voided:</b> ' + esc(x.void_reason || '') : ''}</div></div><div style="display:flex;gap:4px">${x.status === 'pending' ? `<button class="btn sm" data-pay-mark="${esc(x.id)}">Mark paid</button>` : ''}${x.status !== 'void' ? `<button class="btn sm danger" data-pay-void="${esc(x.id)}">Void</button>` : ''}</div></div>`).join('') : '<div class="empty small">No payments recorded.</div>'}</div>
+   <div class="card" style="padding:4px 12px">${list.length ? list.map(x => `<div class="payrow ${x.status === 'void' ? 'void' : ''}"><div><b>${esc(kd(x.amount))}</b> <span class="pill ${x.status === 'paid' ? 'ok' : x.status === 'void' ? '' : 'warn'}">${x.status === 'paid' ? 'Paid' : x.status === 'void' ? 'Voided' : 'Pending'}</span> <span class="small muted">${esc(PKIND[x.kind] || x.kind)}${x.paid_on ? ' · ' + esc(fmtD(x.paid_on)) : ''}${!pid && x.package_id ? ' · ' + esc(tname(S.packages[x.package_id]?.teacherId)) + ' ' + refTag(S.packages[x.package_id]) : ''}</span>${!pid && !x.package_id && x.status !== 'void' && pks.length ? ` <select class="paylink" data-pay-link="${esc(x.id)}" aria-label="Link this payment to a teacher"><option value="">Not linked to a teacher</option>${pks.map(p => `<option value="${esc(p.id)}">${esc(payPkgLabel(p))}</option>`).join('')}</select>` : ''}<div class="small muted">${esc(x.method || '')}${x.note ? ' · ' + esc(x.note) : ''}${x.status === 'void' ? ' · <b>Voided:</b> ' + esc(x.void_reason || '') : ''}</div></div><div style="display:flex;gap:4px">${x.status === 'pending' ? `<button class="btn sm" data-pay-mark="${esc(x.id)}">Mark paid</button>` : ''}${x.status !== 'void' ? `<button class="btn sm danger" data-pay-void="${esc(x.id)}">Void</button>` : ''}</div></div>`).join('') : '<div class="empty small">No payments recorded.</div>'}</div>
    <div class="payadd"><input type="number" min="0" step="0.001" id="payAmt" placeholder="Amount (KD)" aria-label="Amount"><input type="text" id="payMethod" list="payMethods" placeholder="Method" aria-label="Method"><datalist id="payMethods">${METHODS.map(m => `<option value="${esc(m)}">`).join('')}</datalist>
     <select id="payKind" aria-label="For">${Object.entries(PKIND).map(([k, v]) => `<option value="${k}" ${k === (pid || defPk ? 'package' : 'book') ? 'selected' : ''}>${v}</option>`).join('')}</select>
     ${pid ? '' : `<select id="payPkg" aria-label="Teacher / package"><option value="">No teacher (e.g. book)</option>${pks.map(p => `<option value="${esc(p.id)}" ${p === defPk ? 'selected' : ''}>${esc(payPkgLabel(p))}</option>`).join('')}</select>`}
@@ -631,7 +633,7 @@ function wirePayments() {
 function renderPayments() {
   const f = S.payFilter; const q = f.q.trim().toLowerCase();
   const all = S.payments;
-  const list = all.filter(x => (f.status === 'void' || x.status !== 'void') && (f.method === 'all' || (x.method || '—') === f.method) && (f.status === 'all' || x.status === f.status) && (!q || (sname(x.student_id) + ' ' + x.note + ' ' + x.method).toLowerCase().includes(q)));
+  const list = all.filter(x => (f.status === 'void' || x.status !== 'void') && (f.method === 'all' || (x.method || '—') === f.method) && (f.status === 'all' || x.status === f.status) && (!q || (sname(x.student_id) + ' ' + x.note + ' ' + x.method + ' ' + pkgRef(S.packages[x.package_id])).toLowerCase().includes(q)));
   const paid = all.filter(x => x.status === 'paid'); const pend = all.filter(x => x.status === 'pending');
   const total = a => a.reduce((s, x) => s + Number(x.amount), 0);
   const byMethod = {}; for (const x of paid) byMethod[x.method || '—'] = (byMethod[x.method || '—'] || 0) + Number(x.amount);
@@ -651,11 +653,11 @@ function renderPayments() {
    <div class="card" style="padding:12px 14px"><div class="eyebrow">Not fully paid</div>${unpaidPk.map(p => `<div class="mrow"><a data-open-pkg="${esc(p.id)}" style="cursor:pointer;color:var(--accent)">${esc(sname(p.studentId))}</a><span class="small muted">${esc(tname(p.teacherId))} · ${esc(PAY[p.payment]?.[0] || '')}</span></div>`).join('') || '<p class="small muted">Everyone has paid.</p>'}</div>
   </div>
   <div class="filters" style="margin:16px 0 12px">
-   <input type="search" id="yq" placeholder="Search student or note" value="${esc(f.q)}" aria-label="Search payments">
+   <input type="search" id="yq" placeholder="Search student, note or PKG ref" value="${esc(f.q)}" aria-label="Search payments">
    <select id="ym" aria-label="Method"><option value="all">Any method</option>${[...new Set(all.map(x => x.method || '—'))].sort().map(m => `<option ${f.method === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>
    <select id="ys" aria-label="Status"><option value="all">Paid and pending</option><option value="paid" ${f.status === 'paid' ? 'selected' : ''}>Paid</option><option value="pending" ${f.status === 'pending' ? 'selected' : ''}>Pending</option><option value="void" ${f.status === 'void' ? 'selected' : ''}>Voided</option></select>
    <span class="muted small">${list.length} payments · ${esc(kd(total(list.filter(x => x.status === 'paid'))))}</span></div>
-  <div class="tbl-wrap"><table><thead><tr><th>Student</th><th>Amount</th><th>For</th><th>Method</th><th>Status</th><th>Note</th></tr></thead><tbody>${list.map(x => `<tr ${x.package_id ? `data-open-pkg="${esc(x.package_id)}"` : `data-open-stu="${esc(x.student_id)}"`}><td><b>${esc(sname(x.student_id))}</b>${x.package_id ? `<div class="small muted">${esc(tname(S.packages[x.package_id]?.teacherId))}</div>` : ''}</td><td class="num">${esc(kd(x.amount))}</td><td>${esc(PKIND[x.kind] || x.kind)}</td><td class="small">${esc(x.method || '—')}</td><td><span class="pill ${x.status === 'paid' ? 'ok' : x.status === 'void' ? '' : 'warn'}">${x.status === 'paid' ? 'Paid' : x.status === 'void' ? 'Voided' : 'Pending'}</span></td><td class="small muted">${esc(x.note || '')}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">No payments match.</td></tr>'}</tbody></table></div>`;
+  <div class="tbl-wrap"><table><thead><tr><th>Student</th><th>Amount</th><th>For</th><th>Method</th><th>Status</th><th>Note</th></tr></thead><tbody>${list.map(x => `<tr ${x.package_id ? `data-open-pkg="${esc(x.package_id)}"` : `data-open-stu="${esc(x.student_id)}"`}><td><b>${esc(sname(x.student_id))}</b>${x.package_id ? `<div class="small muted">${esc(tname(S.packages[x.package_id]?.teacherId))} ${refTag(S.packages[x.package_id])}</div>` : ''}</td><td class="num">${esc(kd(x.amount))}</td><td>${esc(PKIND[x.kind] || x.kind)}</td><td class="small">${esc(x.method || '—')}</td><td><span class="pill ${x.status === 'paid' ? 'ok' : x.status === 'void' ? '' : 'warn'}">${x.status === 'paid' ? 'Paid' : x.status === 'void' ? 'Voided' : 'Pending'}</span></td><td class="small muted">${esc(x.note || '')}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">No payments match.</td></tr>'}</tbody></table></div>`;
   $('#yq').oninput = e => { f.q = e.target.value; const pos = e.target.selectionStart; render(); const el = $('#yq'); el.focus(); el.setSelectionRange(pos, pos); };
   $('#ym').onchange = e => { f.method = e.target.value; render(); };
   $('#ys').onchange = e => { f.status = e.target.value; render(); };
@@ -668,7 +670,7 @@ const FIELD = {
   term: 'Term', payment: 'Payment', paid_note: 'Payment note', price: 'Price (KWD)', notes: 'Notes', closed: 'Closed', kind: 'Type', subject: 'Subject',
   teacher_id: 'Teacher', student_id: 'Student', name: 'Name', guardian: 'Parent / Guardian', phone: 'Phone', reg_form: 'Registration form', archived: 'Archived',
   day: 'Day', start_time: 'Start', dur: 'Length (min)', label: 'Label', subjects: 'Subjects', color: 'Colour', sort_order: 'Order', school_name: 'Studio name',
-  low_threshold: 'Warning level', void_reason: 'Void reason', renewed_from: 'Renewed from', role: 'Access', email: 'Email', end_date: 'End date', amount: 'Amount (KWD)', method: 'Method', paid_on: 'Paid on',
+  low_threshold: 'Warning level', void_reason: 'Void reason', renewed_from: 'Renewed from', ref: 'Reference', role: 'Access', email: 'Email', end_date: 'End date', amount: 'Amount (KWD)', method: 'Method', paid_on: 'Paid on',
 };
 const HIDDEN_FIELDS = new Set(['id', 'created_at', 'created_by', 'user_id']);
 const pkgMemo = {};
@@ -868,7 +870,7 @@ function drawPackage(id) {
   const s = stats(p); const A = isAdmin(); const dis = A ? '' : 'disabled';
   const opts = (o, cur) => Object.entries(o).map(([k, v]) => `<option value="${k}" ${cur === k ? 'selected' : ''}>${esc(Array.isArray(v) ? v[0] : (v.label || v))}</option>`).join('');
   const log = (p.log || []).map(e => isPast(e.d) ? `<div class="logrow past"><span class="small">🔒 ${esc(fmtD(e.d))}</span><span class="chip ${esc(e.s)}" style="justify-self:start">${esc(ST[e.s]?.label || e.s)}</span><span class="ltime small">${e.t ? esc(fmtT(e.t)) : ''}</span><span class="lnote small muted">${esc(e.n || '')}</span>${A ? `<button class="btn ghost sm" data-correct="${esc(e.id)}" title="Correct this past mark (reason required)" aria-label="Correct">✎</button>` : '<span></span>'}</div>` : `<div class="logrow"><input type="date" value="${esc(e.d)}" data-lg="${esc(e.id)}|lesson_date" aria-label="Date"><select data-lg="${esc(e.id)}|status" aria-label="Status">${opts(ST, e.s)}</select><input class="ltime" type="time" step="300" value="${esc(e.t || '')}" data-lg="${esc(e.id)}|start_time" aria-label="Time (for a makeup or extra lesson)" title="Time, for a makeup or extra lesson"><input class="lnote" type="text" value="${esc(e.n || '')}" placeholder="Note" data-lg="${esc(e.id)}|note" aria-label="Note"><button class="btn ghost sm" data-lgdel="${esc(e.id)}" aria-label="Remove">✕</button></div>`).join('');
-  shell(sname(p.studentId), `${esc(tname(p.teacherId))} · ${esc(KINDS[p.kind] || '')} package${p.term ? ' · ' + esc(p.term) : ''}`, `
+  shell(sname(p.studentId), `${refTag(p)} ${esc(tname(p.teacherId))} · ${esc(KINDS[p.kind] || '')} package${p.term ? ' · ' + esc(p.term) : ''}`, `
    <div class="namecell" style="gap:10px">${avatar('student', p.studentId, 44)}${avatar('teacher', p.teacherId, 32)}</div>
    ${p.closed ? '<div class="infobox">This package is closed. It is kept for history.</div>' : s.used > s.total ? `<div class="badbox">${s.used - s.total} lesson(s) used beyond the package. Renew and move the extra lessons, or adjust the size.</div>` : s.state === 'finished' ? '<div class="badbox">All lessons used. Renew to keep marking attendance.</div>' : ''}
    ${s.ended ? `<div class="warnbox">This package's end date (${esc(fmtD(p.end))}) has passed${s.left > 0 ? ` with ${s.left} lessons not used` : ''}. Renew or close it.</div>` : ''}
@@ -928,7 +930,7 @@ function studentSummary(id) {
     const head = [ps[0]?.subject, `${perWeek}× a week`, durs.length ? durs.map(hrs).join(' / ') + ' each' : ''].filter(Boolean).join(' · ');
     const times = ts.length ? ts.map(x => `<li>${DAYS[x.day]} ${fmtTs(x.start)}–${fmtT(toMin(x.start) + x.dur)}${x.status === 'tentative' ? ' <span class="pill warn">not confirmed</span>' : ''}</li>`).join('') : '<li class="muted">No weekly time on the timetable yet</li>';
     const warn = ps.length && ts.length && ts.length !== perWeek ? `<div class="small" style="color:var(--warn)">The package says ${perWeek}× a week but the timetable has ${ts.length} weekly time${ts.length === 1 ? '' : 's'}.</div>` : '';
-    const pk = ps.map(p => { const st = stats(p); return `<div class="small" style="display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;cursor:pointer" data-open-pkg="${esc(p.id)}"><b>${esc(KINDS[p.kind] || p.kind)} package</b>${p.term ? `<span class="muted">${esc(p.term)}</span>` : ''}<span>${st.total} lessons · ${st.used} used · <b style="color:${st.left <= 0 ? 'var(--bad)' : st.state === 'low' ? 'var(--warn)' : 'inherit'}">${st.left} left</b></span>${st.owed ? `<span class="pill vio">${st.owed} makeup owed</span>` : ''}<span class="pill ${PAY[p.payment]?.[1] || ''}">${esc(PAY[p.payment]?.[0] || p.payment)}</span>${p.start || p.end ? `<span class="muted">${p.start ? esc(fmtD(p.start, { day: 'numeric', month: 'short', year: 'numeric' })) : ''} → ${p.end ? esc(fmtD(p.end, { day: 'numeric', month: 'short', year: 'numeric' })) : 'no end date'}</span>` : ''}</div>`; }).join('') || '<div class="small" style="color:var(--bad)">No open package with this teacher</div>';
+    const pk = ps.map(p => { const st = stats(p); return `<div class="small" style="display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;cursor:pointer" data-open-pkg="${esc(p.id)}">${refTag(p)}<b>${esc(KINDS[p.kind] || p.kind)} package</b>${p.term ? `<span class="muted">${esc(p.term)}</span>` : ''}<span>${st.total} lessons · ${st.used} used · <b style="color:${st.left <= 0 ? 'var(--bad)' : st.state === 'low' ? 'var(--warn)' : 'inherit'}">${st.left} left</b></span>${st.owed ? `<span class="pill vio">${st.owed} makeup owed</span>` : ''}<span class="pill ${PAY[p.payment]?.[1] || ''}">${esc(PAY[p.payment]?.[0] || p.payment)}</span>${p.start || p.end ? `<span class="muted">${p.start ? esc(fmtD(p.start, { day: 'numeric', month: 'short', year: 'numeric' })) : ''} → ${p.end ? esc(fmtD(p.end, { day: 'numeric', month: 'short', year: 'numeric' })) : 'no end date'}</span>` : ''}</div>`; }).join('') || '<div class="small" style="color:var(--bad)">No open package with this teacher</div>';
     const upcoming = ps.flatMap(p => (p.log || []).filter(e => e.d >= today && e.s === 'makeup').map(e => `<li>${esc(fmtD(e.d))}${e.t ? ` ${fmtTs(e.t)}–${fmtT(toMin(e.t) + (e.du || defDur(id, tid)))}` : ' (no time set)'}</li>`)).join('');
     return `<div class="card" style="padding:12px 14px;border-left:4px solid ${esc(tcolor(tid))}"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${avatar('teacher', tid, 24)}<b>${esc(tname(tid))}</b><span class="muted small">${esc(head)}</span></div>
       <ul class="small" style="margin:6px 0;padding-left:18px">${times}</ul>${warn}${pk}${upcoming ? `<div class="small" style="margin-top:6px"><b>Upcoming makeups</b><ul style="margin:2px 0 0;padding-left:18px">${upcoming}</ul></div>` : ''}</div>`;
@@ -948,7 +950,7 @@ function drawStudent(id) {
     <label class="f">Registration form<select id="sF" ${dis}>${Object.entries(FORM).map(([k, v]) => `<option value="${k}" ${s.regForm === k ? 'selected' : ''}>${v[0]}</option>`).join('')}</select></label>
    </div><label class="f">Notes<textarea id="sNo" ${dis}>${esc(s.notes || '')}</textarea></label>
    ${A ? `<div class="row-end">${s.archived ? '<button class="btn sm" id="sArch">Restore</button>' : ''}<button class="btn sm primary" id="sSave">Save student</button></div>` : ''}
-   <div class="sect"><h3>All packages</h3>${pk.map(p => { const st = stats(p); return `<div class="card" style="padding:10px 12px;cursor:pointer" data-open-pkg="${esc(p.id)}"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="dot" style="background:${esc(tcolor(p.teacherId))}"></span><b>${esc(tname(p.teacherId))}</b><span class="muted small">${esc(KINDS[p.kind] || '')} · ${esc(p.term || '')}</span><span style="margin-left:auto" class="pill ${p.closed ? '' : st.state === 'finished' ? 'bad' : st.state === 'low' ? 'warn' : 'ok'}">${p.closed ? 'Closed' : st.left + ' left'}</span></div>${meter(st)}${chips(p)}</div>`; }).join('') || '<p class="muted small">No packages yet.</p>'}
+   <div class="sect"><h3>All packages</h3>${pk.map(p => { const st = stats(p); return `<div class="card" style="padding:10px 12px;cursor:pointer" data-open-pkg="${esc(p.id)}"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="dot" style="background:${esc(tcolor(p.teacherId))}"></span><b>${esc(tname(p.teacherId))}</b>${refTag(p)}<span class="muted small">${esc(KINDS[p.kind] || '')} · ${esc(p.term || '')}</span><span style="margin-left:auto" class="pill ${p.closed ? '' : st.state === 'finished' ? 'bad' : st.state === 'low' ? 'warn' : 'ok'}">${p.closed ? 'Closed' : st.left + ' left'}</span></div>${meter(st)}${chips(p)}</div>`; }).join('') || '<p class="muted small">No packages yet.</p>'}
     ${A ? '<div><button class="btn sm" id="sNewPkg">New package</button></div>' : ''}</div>
    ${A ? paymentsSect(S.payments.filter(x => x.student_id === id), id, null) : ''}
    ${A ? timelineSect('student', id) : ''}`);
@@ -1129,10 +1131,10 @@ async function exportXlsxInner() {
   const sheetName = n => { let base = String(n || '').replace(/[\\/?*[\]:]/g, '').trim().slice(0, 28) || 'Sheet'; let name = base, i = 2; while (used.has(name.toLowerCase())) name = `${base} (${i++})`; used.add(name.toLowerCase()); return name; };
   ['Attendance', 'Students', 'Payments'].forEach(n => used.add(n.toLowerCase()));
   const wb = X.utils.book_new();
-  const att = [['Teacher', 'Student', 'Subject', 'Type', 'Term', 'Start', 'End', 'Lessons', 'Used', 'Left', 'Makeups owed', 'Payment', 'Status', 'Lessons logged']];
+  const att = [['Ref', 'Teacher', 'Student', 'Subject', 'Type', 'Term', 'Start', 'End', 'Lessons', 'Used', 'Left', 'Makeups owed', 'Payment', 'Status', 'Lessons logged']];
   for (const p of pkgList().sort((a, b) => tname(a.teacherId).localeCompare(tname(b.teacherId)) || sname(a.studentId).localeCompare(sname(b.studentId)))) {
     const s = stats(p);
-    att.push([tname(p.teacherId), sname(p.studentId), p.subject || '', KINDS[p.kind] || p.kind, p.term || '', p.start || '', p.end || '', s.total, s.used, s.left, s.owed, PAY[p.payment]?.[0] || '', p.closed ? 'Closed' : (STATE_LABEL[s.state] || s.state) + (s.ended ? ' (end date passed)' : ''), ...(p.log || []).map(e => `${e.d}${e.s === 'present' ? '' : ' (' + (ST[e.s]?.seg || e.s) + ')'}`)]);
+    att.push([pkgRef(p), tname(p.teacherId), sname(p.studentId), p.subject || '', KINDS[p.kind] || p.kind, p.term || '', p.start || '', p.end || '', s.total, s.used, s.left, s.owed, PAY[p.payment]?.[0] || '', p.closed ? 'Closed' : (STATE_LABEL[s.state] || s.state) + (s.ended ? ' (end date passed)' : ''), ...(p.log || []).map(e => `${e.d}${e.s === 'present' ? '' : ' (' + (ST[e.s]?.seg || e.s) + ')'}`)]);
   }
   X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(att), 'Attendance');
   for (const t of teacherIds()) {
@@ -1143,8 +1145,8 @@ async function exportXlsxInner() {
   const st = [['Student', 'Parent / Guardian', 'Phone', 'Registration form', 'Notes', 'Archived']];
   for (const id of studentIds(true)) { const s = S.students[id]; st.push([s.name, s.guardian || '', s.phone || '', FORM[s.regForm]?.[0] || '', s.notes || '', s.archived ? 'Yes' : '']); }
   X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(st), 'Students');
-  const pays = [['Student', 'Teacher', 'Amount (KD)', 'For', 'Method', 'Status', 'Paid on', 'Note', 'Void reason']];
-  for (const x of S.payments) pays.push([sname(x.student_id), x.package_id ? tname(S.packages[x.package_id]?.teacherId) : '', x.status === 'void' ? 0 : Number(x.amount), PKIND[x.kind] || x.kind, x.method || '', ({ paid: 'Paid', pending: 'Pending', void: `Voided (was ${x.amount} KD)` })[x.status] || x.status, x.paid_on || '', x.note || '', x.void_reason || '']);
+  const pays = [['Student', 'Package ref', 'Teacher', 'Amount (KD)', 'For', 'Method', 'Status', 'Paid on', 'Note', 'Void reason']];
+  for (const x of S.payments) pays.push([sname(x.student_id), pkgRef(S.packages[x.package_id]), x.package_id ? tname(S.packages[x.package_id]?.teacherId) : '', x.status === 'void' ? 0 : Number(x.amount), PKIND[x.kind] || x.kind, x.method || '', ({ paid: 'Paid', pending: 'Pending', void: `Voided (was ${x.amount} KD)` })[x.status] || x.status, x.paid_on || '', x.note || '', x.void_reason || '']);
   X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(pays), 'Payments');
   X.writeFile(wb, `studio-${kwToday()}.xlsx`);
   sb.rpc('log_event', { p_action: 'EXPORT', p_detail: { file: `studio-${kwToday()}.xlsx`, packages: pkgList().length } }).then(() => {}, () => {});

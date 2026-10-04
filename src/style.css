@@ -224,6 +224,7 @@ th{letter-spacing:.14em}
 .payadd{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:6px}
 .payadd input,.payadd select{font-size:13.5px;padding:6px 8px}
 .paylink{font-size:12.5px;padding:2px 6px;margin-left:4px;border:1px dashed var(--warn);border-radius:6px;background:var(--warn-soft);color:var(--ink);max-width:100%}
+.ref{display:inline-block;font-family:var(--f-mono);font-size:11px;font-weight:600;letter-spacing:.02em;padding:1px 6px;border-radius:5px;background:var(--sunk);color:var(--muted);border:1px solid var(--line);white-space:nowrap;vertical-align:middle}
 .paygrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:12px}
 .paycols{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
 .mrow{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-top:1px solid var(--line);font-size:14px}
