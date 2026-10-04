@@ -941,7 +941,7 @@ function drawStudent(id) {
     <label class="f">Phone<input type="tel" id="sP" value="${esc(s.phone || '')}" ${dis}>${intlPhone(s.phone) ? `<span style="margin-top:4px">${phoneLinks(s.phone, true)}</span>` : ''}</label>
     <label class="f">Registration form<select id="sF" ${dis}>${Object.entries(FORM).map(([k, v]) => `<option value="${k}" ${s.regForm === k ? 'selected' : ''}>${v[0]}</option>`).join('')}</select></label>
    </div><label class="f">Notes<textarea id="sNo" ${dis}>${esc(s.notes || '')}</textarea></label>
-   ${A ? `<div class="row-end"><button class="btn sm" id="sArch">${s.archived ? 'Restore' : 'Archive'}</button><button class="btn sm primary" id="sSave">Save student</button></div>` : ''}
+   ${A ? `<div class="row-end">${s.archived ? '<button class="btn sm" id="sArch">Restore</button>' : ''}<button class="btn sm primary" id="sSave">Save student</button></div>` : ''}
    <div class="sect"><h3>All packages</h3>${pk.map(p => { const st = stats(p); return `<div class="card" style="padding:10px 12px;cursor:pointer" data-open-pkg="${esc(p.id)}"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="dot" style="background:${esc(tcolor(p.teacherId))}"></span><b>${esc(tname(p.teacherId))}</b><span class="muted small">${esc(KINDS[p.kind] || '')} · ${esc(p.term || '')}</span><span style="margin-left:auto" class="pill ${p.closed ? '' : st.state === 'finished' ? 'bad' : st.state === 'low' ? 'warn' : 'ok'}">${p.closed ? 'Closed' : st.left + ' left'}</span></div>${meter(st)}${chips(p)}</div>`; }).join('') || '<p class="muted small">No packages yet.</p>'}
     ${A ? '<div><button class="btn sm" id="sNewPkg">New package</button></div>' : ''}</div>
    ${A ? paymentsSect(S.payments.filter(x => x.student_id === id), id, null) : ''}
@@ -949,7 +949,7 @@ function drawStudent(id) {
   if (!A) return;
   wirePayments();
   $('#sSave').onclick = () => { const patch = { name: $('#sN').value.trim(), guardian: $('#sG').value.trim(), phone: $('#sP').value.trim(), regForm: $('#sF').value, notes: $('#sNo').value }; if (!patch.name) return toast('A student needs a name'); run(sb.from('students').update(toRow(patch, stuCols)).eq('id', id), 'Student saved').then(() => renderOverlay(true)).catch(() => {}); };
-  $('#sArch').onclick = () => s.archived ? run(sb.from('students').update({ archived: false }).eq('id', id), 'Restored').catch(() => {}) : confirmBox(`Archive ${s.name}? They disappear from lists but all their packages, lessons and payments stay on record. You can restore them any time from Students → Archived.`, () => run(sb.from('students').update({ archived: true }).eq('id', id), 'Archived'), 'Archive');
+  if (s.archived) $('#sArch').onclick = () => run(sb.from('students').update({ archived: false }).eq('id', id), 'Restored').catch(() => {});
   $('#sNewPkg').onclick = () => openModal('newpkg', { studentId: id });
 }
 
