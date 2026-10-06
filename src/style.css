@@ -337,3 +337,4 @@ th{letter-spacing:.14em}
 .rcontact{display:flex;justify-content:center;flex-wrap:wrap;gap:8px 26px;margin-top:8px;font-size:13px;font-weight:600;color:#1d0c20}
 .rcontact span{display:inline-flex;align-items:center;gap:6px}
 .rcontact svg{width:15px;height:15px;color:#ae772b}
+.voidrow td{opacity:.55}.voidrow td b{text-decoration:line-through}

@@ -15,7 +15,7 @@ Replaces the old "Schedules and attendance" spreadsheet.
 | Timetable | Weekly grid per teacher. Click to add or edit a lesson time. Flags clashes and shows open times |
 | Attendance | Every package: lessons used and left, makeups owed, payment, and the lesson log |
 | Students | Parent / guardian, phone, registration form, packages and weekly times |
-| Payments (super admin) | Every payment (package, book, trial, single session) with method and status; totals by method and teacher; packages not fully paid |
+| Payments (super admin) | Every payment (package, book, trial, single session) with method and status; totals by method and teacher; packages not fully paid. **Expenses** view: record studio costs (rent, teacher pay, instruments, ...), totals by category and method, and net (collected minus spent) per month |
 | History (super admin) | Every change anyone makes: who, when, and the exact before → after values. Filter by person, area and date. Packages and students also show their own change history |
 | Setup (super admin) | People and access, studio settings, teachers, Excel export |
 

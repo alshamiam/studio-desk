@@ -6,11 +6,11 @@ const sb = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 /* ---------- state ---------- */
 const S = {
-  teachers: {}, students: {}, packages: {}, profiles: [], payments: [],
+  teachers: {}, students: {}, packages: {}, profiles: [], payments: [], expenses: [],
   settings: { schoolName: 'Studio Desk', term: '', lowThreshold: 2 },
   session: null, me: null, loaded: false, authMode: 'signin', recovery: false,
   tab: 'today', date: null, weekTeacher: null, weekStart: null,
-  pkgFilter: { teacher: 'all', state: 'active', q: '' }, payFilter: { q: '', method: 'all', status: 'all' }, hist: { rows: [], actor: 'all', area: 'all', q: '', from: '', to: '', done: false, loading: false }, stuFilter: { q: '', form: 'all', teacher: 'all' },
+  pkgFilter: { teacher: 'all', state: 'active', q: '' }, payFilter: { q: '', method: 'all', status: 'all' }, payView: 'in', exFilter: { month: '', cat: 'all', q: '', showVoid: false }, hist: { rows: [], actor: 'all', area: 'all', q: '', from: '', to: '', done: false, loading: false }, stuFilter: { q: '', form: 'all', teacher: 'all' },
 };
 let drawer = null;
 let modal = null;
@@ -198,6 +198,8 @@ async function loadAll() {
     isAdmin() ? sb.from('profiles').select('*').order('created_at') : Promise.resolve({ data: [] }),
     isAdmin() ? sb.from('payments').select('*').order('created_at', { ascending: false }) : Promise.resolve({ data: [] }),
   ]);
+  const ex = isAdmin() ? await sb.from('expenses').select('*').order('spent_on', { ascending: false }).order('created_at', { ascending: false }) : { data: [] };
+  if (ex.error) console.error(ex.error);
   if (seq !== loadSeq) return;
   const bad = q.find(r => r.error); if (bad) { console.error(bad.error); toast('Could not load the studio data. Refresh to try again.'); return; }
   const [t, s, p, l, sl, st, pr, pay] = q.map(r => r.data);
@@ -210,7 +212,7 @@ async function loadAll() {
   for (const r of p) packages[r.id] = { studentId: r.student_id, teacherId: r.teacher_id, subject: r.subject, kind: r.kind, sessions: r.sessions, perWeek: r.per_week, start: r.start_date, end: r.end_date, term: r.term, payment: r.payment, paidNote: r.paid_note, price: r.price, notes: r.notes, closed: r.closed, ref: r.ref, log: [] };
   for (const r of l) packages[r.package_id]?.log.push({ id: r.id, d: r.lesson_date, s: r.status, n: r.note, t: r.start_time || null, du: r.dur || null });
   for (const k in packages) packages[k].log.sort((a, b) => a.d.localeCompare(b.d));
-  Object.assign(S, { teachers, students, packages, profiles: pr || [], payments: pay || [], loaded: true });
+  Object.assign(S, { teachers, students, packages, profiles: pr || [], payments: pay || [], expenses: ex.error ? null : ex.data || [], loaded: true });
   if (st) S.settings = { schoolName: st.school_name, term: st.term, lowThreshold: st.low_threshold, phone: st.phone || '', instagram: st.instagram || '' };
   render();
   refreshPhotoUrls();
@@ -650,7 +652,10 @@ function wirePayments() {
     run(sb.from('payments').insert(row), 'Payment recorded').then(() => renderOverlay(true)).catch(() => {}).finally(() => { add.disabled = false; });
   };
 }
+const viewToggle = () => `<div class="seg" role="group" aria-label="Show"><button data-payview="in" class="${S.payView === 'in' ? 'on-present' : ''}" aria-pressed="${S.payView === 'in'}">Payments in</button><button data-payview="out" class="${S.payView === 'out' ? 'on-present' : ''}" aria-pressed="${S.payView === 'out'}">Expenses</button></div>`;
+const wireViewToggle = () => document.querySelectorAll('[data-payview]').forEach(b => b.onclick = () => { S.payView = b.dataset.payview; render(); });
 function renderPayments() {
+  if (S.payView === 'out') return renderExpenses();
   const f = S.payFilter; const q = f.q.trim().toLowerCase();
   const all = S.payments;
   const list = all.filter(x => (f.status === 'void' || x.status !== 'void') && (f.method === 'all' || (x.method || '—') === f.method) && (f.status === 'all' || x.status === f.status) && (!q || (sname(x.student_id) + ' ' + x.note + ' ' + x.method + ' ' + pkgRef(S.packages[x.package_id]) + ' ' + rcptNo(x)).toLowerCase().includes(q)));
@@ -661,7 +666,7 @@ function renderPayments() {
   const unpaidPk = pkgList().filter(p => !p.closed && p.payment !== 'paid');
   const tiles = (obj) => Object.entries(obj).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="mrow"><span>${esc(k)}</span><b class="num">${esc(kd(v))}</b></div>`).join('');
   $('#view').innerHTML = `
-  <div class="bar"><h2>Payments</h2></div>
+  <div class="bar"><h2>Payments</h2><span style="margin-left:auto">${viewToggle()}</span></div>
   <div class="paygrid">
    <div class="stat"><b>${esc(kd(total(paid)))}</b><span>collected · ${paid.length} payments</span></div>
    <div class="stat"><b style="color:var(--warn)">${esc(kd(total(pend)))}</b><span>pending · ${pend.length}</span></div>
@@ -681,16 +686,81 @@ function renderPayments() {
   $('#yq').oninput = e => { f.q = e.target.value; const pos = e.target.selectionStart; render(); const el = $('#yq'); el.focus(); el.setSelectionRange(pos, pos); };
   $('#ym').onchange = e => { f.method = e.target.value; render(); };
   $('#ys').onchange = e => { f.status = e.target.value; render(); };
+  wireViewToggle();
+}
+
+/* ---------- EXPENSES (super admin, on the Payments tab) ---------- */
+const EXCAT = { rent: 'Rent', teacher: 'Teacher pay', salary: 'Staff salaries', utilities: 'Utilities & internet', instruments: 'Instruments & repairs', materials: 'Books & materials', marketing: 'Marketing & ads', supplies: 'Office & supplies', other: 'Other' };
+const EXMETHODS = ['Company account', 'KNET', 'Cash', 'Bank transfer', 'Paid by Ms. Chaimaa', 'Paid by Ms. Nilufar'];
+const monthName = m => fmtD(m + '-01', { month: 'long', year: 'numeric' });
+function renderExpenses() {
+  const bar = `<div class="bar"><h2>Payments</h2><span style="margin-left:auto">${viewToggle()}</span></div>`;
+  if (S.expenses === null) { $('#view').innerHTML = bar + '<div class="card empty">Expenses are not set up in the database yet. Ask the admin to finish the database setup.</div>'; return wireViewToggle(); }
+  const f = S.exFilter; const q = f.q.trim().toLowerCase(); const all = S.expenses;
+  const inMonth = d => !f.month || String(d || '').slice(0, 7) === f.month;
+  const live = all.filter(x => x.status !== 'void' && inMonth(x.spent_on));
+  const list = all.filter(x => (f.showVoid || x.status !== 'void') && inMonth(x.spent_on) && (f.cat === 'all' || x.category === f.cat) && (!q || `${x.payee} ${x.note} ${x.method} ${EXCAT[x.category] || ''} ${x.teacher_id ? tname(x.teacher_id) : ''}`.toLowerCase().includes(q)));
+  const total = a => a.reduce((t, x) => t + Number(x.amount), 0);
+  // Money in for the same period: paid payments by the date they were paid.
+  const inSum = total(S.payments.filter(x => x.status === 'paid' && inMonth(x.paid_on || String(x.created_at || '').slice(0, 10))));
+  const outSum = total(live); const net = inSum - outSum;
+  const byCat = {}; for (const x of live) byCat[EXCAT[x.category] || x.category] = (byCat[EXCAT[x.category] || x.category] || 0) + Number(x.amount);
+  const byMethod = {}; for (const x of live) byMethod[x.method || '—'] = (byMethod[x.method || '—'] || 0) + Number(x.amount);
+  const tiles = obj => Object.entries(obj).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="mrow"><span>${esc(k)}</span><b class="num">${esc(kd(v))}</b></div>`).join('');
+  const months = [...new Set([kwToday().slice(0, 7), ...all.map(x => String(x.spent_on || '').slice(0, 7)).filter(Boolean)])].sort().reverse();
+  const period = f.month ? monthName(f.month) : 'all time';
+  $('#view').innerHTML = `${bar}
+  <div class="paygrid">
+   <div class="stat"><b style="color:var(--bad)">${esc(kd(outSum))}</b><span>spent · ${esc(period)} · ${live.length} expenses</span></div>
+   <div class="stat"><b style="color:var(--ok)">${esc(kd(inSum))}</b><span>collected · ${esc(period)}</span></div>
+   <div class="stat"><b style="color:${net < 0 ? 'var(--bad)' : 'inherit'}">${net < 0 ? '−' : ''}${esc(kd(Math.abs(net)))}</b><span>net (collected minus spent)</span></div>
+  </div>
+  <div class="card" style="padding:12px 14px;margin-bottom:12px"><div class="eyebrow" style="margin-bottom:8px">Add expense</div>
+   <div class="payadd"><input type="number" min="0" step="0.001" id="exAmt" placeholder="Amount (KD)" aria-label="Amount">
+    <select id="exCat" aria-label="Category">${Object.entries(EXCAT).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('')}</select>
+    <select id="exT" aria-label="Teacher (for teacher pay)"><option value="">No teacher</option>${teacherIds().map(t => `<option value="${esc(t)}">${esc(tname(t))}</option>`).join('')}</select>
+    <input type="text" id="exPayee" placeholder="Paid to (e.g. landlord)" aria-label="Paid to">
+    <input type="text" id="exMethod" list="exMethods" placeholder="Method" aria-label="Method"><datalist id="exMethods">${EXMETHODS.map(m => `<option value="${esc(m)}">`).join('')}</datalist>
+    <input type="date" id="exOn" value="${kwToday()}" aria-label="Date"><input type="text" id="exNote" placeholder="Note" aria-label="Note">
+    <button class="btn sm primary" id="exAdd">Add expense</button></div></div>
+  <div class="paycols">
+   <div class="card" style="padding:12px 14px"><div class="eyebrow">By category</div>${tiles(byCat) || '<p class="small muted">No expenses yet.</p>'}</div>
+   <div class="card" style="padding:12px 14px"><div class="eyebrow">By method</div>${tiles(byMethod) || '<p class="small muted">No expenses yet.</p>'}</div>
+  </div>
+  <div class="filters" style="margin:16px 0 12px">
+   <select id="exM" aria-label="Month"><option value="">All months</option>${months.map(m => `<option value="${m}" ${f.month === m ? 'selected' : ''}>${esc(monthName(m))}</option>`).join('')}</select>
+   <select id="exC" aria-label="Category"><option value="all">Any category</option>${Object.entries(EXCAT).map(([k, v]) => `<option value="${k}" ${f.cat === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>
+   <input type="search" id="exQ" placeholder="Search paid to, note or method" value="${esc(f.q)}" aria-label="Search expenses">
+   <label class="small" style="display:inline-flex;gap:6px;align-items:center"><input type="checkbox" id="exV" ${f.showVoid ? 'checked' : ''}> Show voided</label>
+   <span class="muted small">${list.length} expenses · ${esc(kd(total(list.filter(x => x.status !== 'void'))))}</span></div>
+  <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Amount</th><th>Category</th><th>Paid to</th><th>Method</th><th>Note</th><th></th></tr></thead><tbody>${list.map(x => `<tr class="${x.status === 'void' ? 'voidrow' : ''}"><td class="small">${esc(fmtD(x.spent_on, { day: 'numeric', month: 'short', year: 'numeric' }))}</td><td class="num"><b>${esc(kd(x.amount))}</b>${x.status === 'void' ? ' <span class="pill">Voided</span>' : ''}</td><td>${esc(EXCAT[x.category] || x.category)}</td><td>${esc([x.teacher_id ? tname(x.teacher_id) : '', x.payee].filter(Boolean).join(' · ') || '—')}</td><td class="small">${esc(x.method || '—')}</td><td class="small muted">${esc(x.note || '')}${x.status === 'void' ? `<div><b>Voided:</b> ${esc(x.void_reason || '')}</div>` : ''}</td><td>${x.status !== 'void' ? `<button class="btn sm danger" data-ex-void="${esc(x.id)}">Void</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">No expenses match.</td></tr>'}</tbody></table></div>`;
+  wireViewToggle();
+  $('#exM').onchange = e => { f.month = e.target.value; render(); };
+  $('#exC').onchange = e => { f.cat = e.target.value; render(); };
+  $('#exV').onchange = e => { f.showVoid = e.target.checked; render(); };
+  $('#exQ').oninput = e => { f.q = e.target.value; const pos = e.target.selectionStart; render(); const el = $('#exQ'); el.focus(); el.setSelectionRange(pos, pos); };
+  $('#exCat').onchange = e => { if (e.target.value !== 'teacher') $('#exT').value = ''; };
+  $('#exT').onchange = e => { if (e.target.value) $('#exCat').value = 'teacher'; };
+  document.querySelectorAll('[data-ex-void]').forEach(b => b.onclick = () => { const x = S.expenses.find(y => y.id === b.dataset.exVoid); reasonBox({ title: 'Void expense', msg: `Void the ${kd(x?.amount)} ${EXCAT[x?.category] || ''} expense from ${fmtD(x?.spent_on)}? It stays on record, crossed out, and stops counting in totals.`, label: 'Reason (required)', required: true, yes: 'Void expense' }, reason => run(sb.from('expenses').update({ status: 'void', void_reason: reason }).eq('id', x.id), 'Expense voided')); });
+  const add = $('#exAdd');
+  add.onclick = () => {
+    if (add.disabled) return;
+    const amount = Number($('#exAmt').value); if (!(amount > 0)) { toast('Enter the amount'); return $('#exAmt').focus(); }
+    const spent_on = $('#exOn').value; if (!spent_on) return toast('Pick a date');
+    add.disabled = true;
+    const row = { amount, category: $('#exCat').value, teacher_id: $('#exT').value || null, payee: $('#exPayee').value.trim(), method: $('#exMethod').value.trim(), spent_on, note: $('#exNote').value.trim() };
+    run(sb.from('expenses').insert(row), 'Expense recorded').catch(() => { add.disabled = false; });
+  };
 }
 
 /* ---------- HISTORY (super admin) ---------- */
-const AREAS = { all: 'Everything', lessons: 'Attendance', packages: 'Packages', payments: 'Payments', students: 'Students', slots: 'Timetable', teachers: 'Teachers', profiles: 'People & access', settings: 'Settings', session: 'Sign-ins & exports' };
+const AREAS = { all: 'Everything', lessons: 'Attendance', packages: 'Packages', payments: 'Payments', expenses: 'Expenses', students: 'Students', slots: 'Timetable', teachers: 'Teachers', profiles: 'People & access', settings: 'Settings', session: 'Sign-ins & exports' };
 const FIELD = {
   lesson_date: 'Date', status: 'Status', note: 'Note', package_id: 'Package', sessions: 'Lessons in package', per_week: 'Lessons per week', start_date: 'Start date',
   term: 'Term', payment: 'Payment', paid_note: 'Payment note', price: 'Price (KWD)', notes: 'Notes', closed: 'Closed', kind: 'Type', subject: 'Subject',
   teacher_id: 'Teacher', student_id: 'Student', name: 'Name', guardian: 'Parent / Guardian', phone: 'Phone', reg_form: 'Registration form', archived: 'Archived',
   day: 'Day', start_time: 'Start', dur: 'Length (min)', label: 'Label', subjects: 'Subjects', color: 'Colour', sort_order: 'Order', school_name: 'Studio name',
-  low_threshold: 'Warning level', instagram: 'Instagram', void_reason: 'Void reason', renewed_from: 'Renewed from', ref: 'Reference', role: 'Access', email: 'Email', end_date: 'End date', amount: 'Amount (KWD)', method: 'Method', paid_on: 'Paid on',
+  low_threshold: 'Warning level', instagram: 'Instagram', void_reason: 'Void reason', renewed_from: 'Renewed from', ref: 'Reference', role: 'Access', email: 'Email', end_date: 'End date', amount: 'Amount (KWD)', method: 'Method', paid_on: 'Paid on', category: 'Category', payee: 'Paid to', spent_on: 'Date',
 };
 const HIDDEN_FIELDS = new Set(['id', 'created_at', 'created_by', 'user_id']);
 const pkgMemo = {};
@@ -747,6 +817,12 @@ function describe(r) {
       if (r.changed.includes('status') && d.status === 'void') return `<b>Voided</b> the ${esc(amt)} payment from <b>${esc(who)}</b>${d.void_reason ? `: ${esc(d.void_reason)}` : ''}`;
       if (r.changed.includes('status') && d.status === 'paid') return `Marked the ${esc(amt)} payment from <b>${esc(who)}</b> as paid`;
       return `Changed a payment from <b>${esc(who)}</b>`;
+    }
+    case 'expenses': {
+      const amt = `${Number(d.amount).toFixed(3).replace(/\.?0+$/, '')} KD`; const what = `${esc(EXCAT[d.category] || d.category)}${d.payee ? ` (${esc(d.payee)})` : d.teacher_id ? ` (${esc(tname(d.teacher_id))})` : ''}`;
+      if (A === 'INSERT') return `Recorded an expense of <b>${esc(amt)}</b>: ${what}`;
+      if (r.changed.includes('status') && d.status === 'void') return `<b>Voided</b> the ${esc(amt)} expense: ${what}${d.void_reason ? ` — ${esc(d.void_reason)}` : ''}`;
+      return `Changed the ${esc(amt)} expense: ${what}`;
     }
     case 'students': return `${A === 'INSERT' ? 'Added' : A === 'DELETE' ? 'Deleted' : r.changed.length === 1 && r.changed[0] === 'archived' ? (d.archived ? 'Archived' : 'Restored') : 'Changed'} student <b>${esc(d.name)}</b>`;
     case 'slots': {
@@ -1266,7 +1342,7 @@ async function exportXlsxInner() {
   const X = await import('xlsx');
   const used = new Set();
   const sheetName = n => { let base = String(n || '').replace(/[\\/?*[\]:]/g, '').trim().slice(0, 28) || 'Sheet'; let name = base, i = 2; while (used.has(name.toLowerCase())) name = `${base} (${i++})`; used.add(name.toLowerCase()); return name; };
-  ['Attendance', 'Students', 'Payments'].forEach(n => used.add(n.toLowerCase()));
+  ['Attendance', 'Students', 'Payments', 'Expenses'].forEach(n => used.add(n.toLowerCase()));
   const wb = X.utils.book_new();
   const att = [['Ref', 'Teacher', 'Student', 'Subject', 'Type', 'Term', 'Start', 'End', 'Lessons', 'Used', 'Left', 'Makeups owed', 'Payment', 'Status', 'Lessons logged']];
   for (const p of pkgList().sort((a, b) => tname(a.teacherId).localeCompare(tname(b.teacherId)) || sname(a.studentId).localeCompare(sname(b.studentId)))) {
@@ -1285,6 +1361,11 @@ async function exportXlsxInner() {
   const pays = [['Receipt', 'Student', 'Package ref', 'Teacher', 'Amount (KD)', 'For', 'Method', 'Status', 'Paid on', 'Note', 'Void reason']];
   for (const x of S.payments) pays.push([rcptNo(x), sname(x.student_id), pkgRef(S.packages[x.package_id]), x.package_id ? tname(S.packages[x.package_id]?.teacherId) : '', x.status === 'void' ? 0 : Number(x.amount), PKIND[x.kind] || x.kind, x.method || '', ({ paid: 'Paid', pending: 'Pending', void: `Voided (was ${x.amount} KD)` })[x.status] || x.status, x.paid_on || '', x.note || '', x.void_reason || '']);
   X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(pays), 'Payments');
+  if (S.expenses) {
+    const exs = [['Date', 'Amount (KD)', 'Category', 'Teacher', 'Paid to', 'Method', 'Status', 'Note', 'Void reason']];
+    for (const x of S.expenses) exs.push([x.spent_on || '', x.status === 'void' ? 0 : Number(x.amount), EXCAT[x.category] || x.category, x.teacher_id ? tname(x.teacher_id) : '', x.payee || '', x.method || '', x.status === 'void' ? `Voided (was ${x.amount} KD)` : 'Paid', x.note || '', x.void_reason || '']);
+    X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(exs), 'Expenses');
+  }
   X.writeFile(wb, `studio-${kwToday()}.xlsx`);
   sb.rpc('log_event', { p_action: 'EXPORT', p_detail: { file: `studio-${kwToday()}.xlsx`, packages: pkgList().length } }).then(() => {}, () => {});
 }
