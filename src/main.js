@@ -377,10 +377,11 @@ function attention() {
   return items;
 }
 const isPast = d => d < kwToday();
-function segButtons(pid, d, cur, keys) {
+// unmark: what pressing the selected button again sets (default: remove the mark). A booked makeup goes back to booked.
+function segButtons(pid, d, cur, keys, unmark) {
   const locked = cur && isPast(d);
   const lockTitle = isAdmin() ? 'Past attendance is locked. Click to correct it with a reason.' : 'Past attendance is locked. Ask a super admin to correct it.';
-  return `<div class="seg ${locked ? 'locked' : ''}" role="group" aria-label="Attendance" ${locked ? `title="${esc(lockTitle)}"` : ''}>${locked ? '<span class="lockico" aria-hidden="true">🔒</span>' : ''}${keys.map(k => `<button data-mark="${esc(pid)}|${d}|${k}" class="${cur === k ? 'on-' + k : ''}" aria-pressed="${cur === k}" ${locked && !isAdmin() ? 'disabled' : ''}>${ST[k].seg}</button>`).join('')}</div>`;
+  return `<div class="seg ${locked ? 'locked' : ''}" role="group" aria-label="Attendance" ${locked ? `title="${esc(lockTitle)}"` : ''}>${locked ? '<span class="lockico" aria-hidden="true">🔒</span>' : ''}${keys.map(k => `<button data-mark="${esc(pid)}|${d}|${k}${unmark ? '|' + unmark : ''}" class="${cur === k ? 'on-' + k : ''}" aria-pressed="${cur === k}" ${locked && !isAdmin() ? 'disabled' : ''}>${ST[k].seg}</button>`).join('')}</div>`;
 }
 function renderToday() {
   const d = S.date || (S.date = kwToday()); const w = wd(d); const isToday = d === kwToday();
@@ -398,7 +399,7 @@ function renderToday() {
       const seg = p ? segButtons(p.id, d, e?.s, ['present', 'absent', 'noshow', 'cancelled']) : (isAdmin() ? `<button class="btn sm" data-new-pkg="${esc(s.studentId)}|${esc(t)}">Add package</button>` : '<span></span>');
       return [toMin(s.start), `<div class="lesson"><span class="time">${fmtTs(s.start)}–${fmtTs(end)}</span><div class="who"><b class="namecell">${avatar('student', s.studentId, 26)}<a style="color:inherit;cursor:pointer" ${p ? `data-open-pkg="${esc(p.id)}"` : `data-open-stu="${esc(s.studentId)}"`}>${esc(sname(s.studentId))}</a></b>${s.status === 'tentative' ? ' <span class="pill warn">not confirmed</span>' : ''}<span class="small muted">${info}${e?.n ? ` · ${esc(e.n)}` : ''}</span></div>${seg}</div>`];
     });
-    rows = rows.concat(extras.map(p => { const e = entryFor(p, d); const st = stats(p); const du = e.du || defDur(p.studentId, t); return [e.t ? toMin(e.t) : 24 * 60, `<div class="lesson"><span class="time">${e.t ? `${fmtTs(e.t)}–${fmtTs(toMin(e.t) + du)}` : 'extra'}</span><div class="who"><b class="namecell">${avatar('student', p.studentId, 26)}<a style="color:inherit;cursor:pointer" data-open-pkg="${esc(p.id)}">${esc(sname(p.studentId))}</a></b><span class="small muted">${st.used} of ${st.total} used${e.n ? ` · ${esc(e.n)}` : ''}</span>${e.s === 'makeup' && !isPast(d) ? `<button class="btn sm ghost" style="margin-top:4px" data-resched="${esc(p.id)}|${esc(e.id)}">↻ Reschedule</button>` : ''}</div>${segButtons(p.id, d, e.s, ['makeup', 'present', 'absent', 'noshow', 'cancelled'])}</div>`]; })).sort((a, b) => a[0] - b[0]).map(r => r[1]).join('');
+    rows = rows.concat(extras.map(p => { const e = entryFor(p, d); const st = stats(p); const du = e.du || defDur(p.studentId, t); return [e.t ? toMin(e.t) : 24 * 60, `<div class="lesson"><span class="time">${e.t ? `${fmtTs(e.t)}–${fmtTs(toMin(e.t) + du)}` : 'extra'}</span><div class="who"><b class="namecell">${avatar('student', p.studentId, 26)}<a style="color:inherit;cursor:pointer" data-open-pkg="${esc(p.id)}">${esc(sname(p.studentId))}</a></b> ${e.s === 'makeup' ? `<span class="pill blue">${isPast(d) ? 'Makeup' : 'Makeup booked'}</span>` : '<span class="pill">Makeup or extra</span>'}<span class="small muted">${st.used} of ${st.total} used${e.n ? ` · ${esc(e.n)}` : ''}</span>${e.s === 'makeup' && !isPast(d) ? `<button class="btn sm ghost" style="margin-top:4px" data-resched="${esc(p.id)}|${esc(e.id)}">↻ Reschedule</button>` : ''}</div>${segButtons(p.id, d, e.s, ['present', 'absent', 'noshow', 'cancelled'], 'makeup')}</div>`]; })).sort((a, b) => a[0] - b[0]).map(r => r[1]).join('');
     body += `<section class="tgroup"><h3>${avatar('teacher', t, 30)}${esc(tname(t))}</h3><div class="card">${rows}</div></section>`;
   }
   if (!any) body = `<div class="card empty">No lessons on the timetable for ${DAYS[w]}s.<br><span class="small">Use “Log makeup or extra” to record a lesson on this day.</span></div>`;
@@ -1249,10 +1250,10 @@ document.addEventListener('click', async e => {
   if (t.dataset.addSlot) { const [d, st] = t.dataset.addSlot.split('|'); return openModal('slot', { teacherId: S.weekTeacher, day: +d, start: st }); }
   if (t.dataset.editSlot) return openModal('slot', { teacherId: S.weekTeacher, slotId: t.dataset.editSlot });
   if (t.dataset.mark) {
-    const [pid, d, k] = t.dataset.mark.split('|'); const cur = entryFor(S.packages[pid], d);
-    if (cur && isPast(d)) { if (!isAdmin()) return toast('Past attendance is locked. Ask a super admin to correct it.'); return openModal('correct', { pid, lessonId: cur.id, status: cur.s === k ? null : k }); }
+    const [pid, d, k, unmark] = t.dataset.mark.split('|'); const cur = entryFor(S.packages[pid], d); const next = cur?.s === k ? unmark || null : k;
+    if (cur && isPast(d)) { if (!isAdmin()) return toast('Past attendance is locked. Ask a super admin to correct it.'); return openModal('correct', { pid, lessonId: cur.id, status: next }); }
     t.closest('.seg')?.querySelectorAll('button').forEach(b => { b.disabled = true; });
-    try { await setLog(pid, d, cur?.s === k ? null : k); } catch (err) { render(); }
+    try { await setLog(pid, d, next); } catch (err) { render(); }
   }
 });
 
