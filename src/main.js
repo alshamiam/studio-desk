@@ -116,8 +116,10 @@ function toast(msg, ms = 2800) { const t = document.createElement('div'); t.clas
 function stats(p) {
   const log = p.log || []; let used = 0, owes = 0, mk = 0; const c = { present: 0, absent: 0, noshow: 0, cancelled: 0, makeup: 0 };
   // An extra lesson marked Present (on a day off the student's weekly timetable) also makes up a missed one.
+  // A makeup or extra that is missed (Absent or Cancelled off the timetable) does not add another makeup: the original one is still owed.
   const slotDays = new Set(slotsOf(p.teacherId).filter(s => s.studentId === p.studentId).map(s => s.day));
-  for (const e of log) { c[e.s] = (c[e.s] || 0) + 1; if (ST[e.s]?.counts) used++; if (ST[e.s]?.owes) owes++; if (e.s === 'makeup' || (e.s === 'present' && !slotDays.has(wd(e.d)))) mk++; }
+  const offSlot = e => slotDays.size > 0 && !slotDays.has(wd(e.d));
+  for (const e of log) { c[e.s] = (c[e.s] || 0) + 1; if (ST[e.s]?.counts) used++; if (ST[e.s]?.owes && !offSlot(e)) owes++; if (e.s === 'makeup' || (e.s === 'present' && !slotDays.has(wd(e.d)))) mk++; }
   const owed = Math.max(0, owes - mk); const total = Number(p.sessions) || 0; const left = total - used;
   const th = Number(S.settings.lowThreshold ?? 2);
   let state = 'active'; if (p.closed) state = 'closed'; else if (left <= 0) state = 'finished'; else if (left <= th) state = 'low';
@@ -578,6 +580,7 @@ function renderSetup() {
    <p><b>No-show</b> uses a lesson. Use it when the student missed without notice and gets no makeup.</p>
    <p><b>Absent</b> does not use a lesson. It adds one makeup owed. When the makeup happens, log it as a Makeup lesson (or mark an extra lesson off the weekly timetable as Present) and the debt clears.</p>
    <p><b>Teacher cancelled</b> works like Absent: no lesson used, one makeup owed.</p>
+   <p>If a scheduled makeup does not happen, mark it <b>Absent</b> (or <b>Teacher cancelled</b>). No lesson is used and the original makeup stays owed, so you can book it again.</p>
    <p><b>Left</b> = package size minus lessons used. A package shows as nearly done at the warning level above and finished at zero.</p>
    <p>Renewing a package closes the old one and starts a new one, so history is kept.</p>
   </div></section>`;
