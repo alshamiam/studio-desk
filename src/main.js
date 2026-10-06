@@ -148,6 +148,20 @@ const carriedOwed = (sid, tid) => pairPkgs(sid, tid).filter(p => p.closed && sta
 const makeupPkg = (sid, tid, date) => pairPkgs(sid, tid).filter(p => stats(p).owed > 0).sort((a, b) => (a.start || '').localeCompare(b.start || ''))[0] || pkgForDate(sid, tid, date);
 // A makeup, or a lesson marked Present on a day off the weekly timetable, belongs on the oldest package that still owes a makeup.
 const owingPkg = (sid, tid) => pairPkgs(sid, tid).filter(p => stats(p).owed > 0).sort((a, b) => (a.start || '').localeCompare(b.start || ''))[0] || null;
+// Lessons that move to the new package on renewal: everything marked from its start date on (a missed first
+// lesson then owes a makeup on the new package), plus lessons beyond the old package's size.
+// Makeups stay with the package whose debt they cleared.
+function renewMoves(old, start) {
+  const ms = e => makesUp(old.studentId, old.teacherId, e.d, e.s);
+  let keep = (old.log || []).filter(e => e.d < start || ms(e));
+  for (const e of keep.filter(e => e.d >= start).sort((a, b) => b.d.localeCompare(a.d))) {
+    const rest = keep.filter(x => x !== e);
+    if (stats({ ...old, log: rest }).owed === stats({ ...old, log: keep }).owed) keep = rest;
+  }
+  const counted = keep.filter(e => ST[e.s]?.counts).sort((a, b) => a.d.localeCompare(b.d)); const total = Number(old.sessions) || 0;
+  const extra = counted.length > total ? counted.slice(total).filter(e => !ms(e)) : [];
+  return (old.log || []).filter(e => !keep.includes(e) || extra.includes(e)).map(e => e.id);
+}
 const isOneOffDay = (sid, tid, date) => { const days = slotsOf(tid).filter(x => x.studentId === sid).map(x => x.day); return days.length > 0 && !days.includes(wd(date)); };
 const makesUp = (sid, tid, date, status) => status === 'makeup' || (status === 'present' && isOneOffDay(sid, tid, date));
 const owedTotal = (sid, tid) => pairPkgs(sid, tid).reduce((a, p) => a + stats(p).owed, 0);
@@ -1207,7 +1221,7 @@ function drawModal() {
   } else if (kind === 'newpkg') {
     const old = ctx.renewOf ? S.packages[ctx.renewOf] : null; const os = old ? stats(old) : null;
     shell(old ? 'Renew package' : 'New package', '', `
-     ${old ? `<div class="infobox">The current package (${os.used} of ${os.total} used${os.owed ? `, ${os.owed} makeup owed` : ''}) will be closed and kept in history.${os.used > os.total ? ` The ${os.used - os.total} extra lesson(s) will move to the new package.` : ''}</div>` : ''}
+     ${old ? `<div class="infobox">The current package (${os.used} of ${os.total} used${os.owed ? `, ${os.owed} makeup owed` : ''}) will be closed and kept in history. Lessons already marked from the new start date on${os.used > os.total ? `, and the ${os.used - os.total} extra lesson(s),` : ''} move to the new package.</div>` : ''}
      <div class="grid2"><label class="f">Student<select id="mSt" ${old ? 'disabled' : ''}>${stuOptions(ctx.studentId)}</select></label>
      <label class="f">Teacher<select id="mT">${teaOptions(ctx.teacherId || S.weekTeacher || teacherIds()[0])}</select></label>
      <label class="f">Type<select id="mK">${Object.entries(KINDS).map(([k, v]) => `<option value="${k}" ${(old?.kind || 'semester') === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
@@ -1229,10 +1243,7 @@ function drawModal() {
       const row = { id, renewed_from: old ? ctx.renewOf : null, student_id: sid, teacher_id: tid, subject: old?.subject || '', kind: $('#mK').value, sessions: Math.max(1, +$('#mNn').value || 1), per_week: Math.max(1, Math.min(7, +$('#mW').value || 1)), start_date: $('#mS').value || kwToday(), end_date: $('#mE').value || null, term: $('#mTerm').value.trim(), payment: $('#mP').value, price: $('#mPr').value === '' ? null : +$('#mPr').value, notes: old && os.owed ? `${os.owed} makeup(s) still owed from the previous package.` : '' };
       try {
         if (old) {
-          // Overrun lessons move to the new package. Makeups stay with the package whose debt they cleared.
-          const counted = (old.log || []).filter(e => ST[e.s]?.counts);
-          const extra = os.used > os.total ? counted.slice(os.total).filter(e => e.s !== 'makeup').map(e => e.id) : [];
-          await run(sb.rpc('renew_package', { p_old: ctx.renewOf, p_new: row, p_move: extra }));
+          await run(sb.rpc('renew_package', { p_old: ctx.renewOf, p_new: row, p_move: renewMoves(old, row.start_date) }));
         } else {
           await run(sb.from('packages').insert(row));
         }
