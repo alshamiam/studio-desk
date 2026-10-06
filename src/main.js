@@ -115,7 +115,9 @@ function toast(msg, ms = 2800) { const t = document.createElement('div'); t.clas
 
 function stats(p) {
   const log = p.log || []; let used = 0, owes = 0, mk = 0; const c = { present: 0, absent: 0, noshow: 0, cancelled: 0, makeup: 0 };
-  for (const e of log) { c[e.s] = (c[e.s] || 0) + 1; if (ST[e.s]?.counts) used++; if (ST[e.s]?.owes) owes++; if (e.s === 'makeup') mk++; }
+  // An extra lesson marked Present (on a day off the student's weekly timetable) also makes up a missed one.
+  const slotDays = new Set(slotsOf(p.teacherId).filter(s => s.studentId === p.studentId).map(s => s.day));
+  for (const e of log) { c[e.s] = (c[e.s] || 0) + 1; if (ST[e.s]?.counts) used++; if (ST[e.s]?.owes) owes++; if (e.s === 'makeup' || (e.s === 'present' && !slotDays.has(wd(e.d)))) mk++; }
   const owed = Math.max(0, owes - mk); const total = Number(p.sessions) || 0; const left = total - used;
   const th = Number(S.settings.lowThreshold ?? 2);
   let state = 'active'; if (p.closed) state = 'closed'; else if (left <= 0) state = 'finished'; else if (left <= th) state = 'low';
@@ -574,7 +576,7 @@ function renderSetup() {
   <section style="margin-top:26px"><h2 style="font-size:20px;margin-bottom:10px">How lessons are counted</h2><div class="howto card" style="padding:16px">
    <p><b>Present</b> and <b>Makeup lesson</b> use one lesson from the package.</p>
    <p><b>No-show</b> uses a lesson. Use it when the student missed without notice and gets no makeup.</p>
-   <p><b>Absent</b> does not use a lesson. It adds one makeup owed. When the makeup happens, log it as a Makeup lesson and the debt clears.</p>
+   <p><b>Absent</b> does not use a lesson. It adds one makeup owed. When the makeup happens, log it as a Makeup lesson (or mark an extra lesson off the weekly timetable as Present) and the debt clears.</p>
    <p><b>Teacher cancelled</b> works like Absent: no lesson used, one makeup owed.</p>
    <p><b>Left</b> = package size minus lessons used. A package shows as nearly done at the warning level above and finished at zero.</p>
    <p>Renewing a package closes the old one and starts a new one, so history is kept.</p>
