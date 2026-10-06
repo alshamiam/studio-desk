@@ -146,6 +146,10 @@ function pkgForDate(sid, tid, date) {
 const carriedOwed = (sid, tid) => pairPkgs(sid, tid).filter(p => p.closed && stats(p).owed > 0).sort((a, b) => (a.start || '').localeCompare(b.start || ''));
 // Where a makeup lesson should be logged: the oldest package that still owes one, even if it was renewed. Otherwise the usual package.
 const makeupPkg = (sid, tid, date) => pairPkgs(sid, tid).filter(p => stats(p).owed > 0).sort((a, b) => (a.start || '').localeCompare(b.start || ''))[0] || pkgForDate(sid, tid, date);
+// A makeup, or a lesson marked Present on a day off the weekly timetable, belongs on the oldest package that still owes a makeup.
+const owingPkg = (sid, tid) => pairPkgs(sid, tid).filter(p => stats(p).owed > 0).sort((a, b) => (a.start || '').localeCompare(b.start || ''))[0] || null;
+const isOneOffDay = (sid, tid, date) => { const days = slotsOf(tid).filter(x => x.studentId === sid).map(x => x.day); return days.length > 0 && !days.includes(wd(date)); };
+const makesUp = (sid, tid, date, status) => status === 'makeup' || (status === 'present' && isOneOffDay(sid, tid, date));
 const owedTotal = (sid, tid) => pairPkgs(sid, tid).reduce((a, p) => a + stats(p).owed, 0);
 const entryFor = (p, date) => p ? (p.log || []).find(e => e.d === date) : null;
 const overlaps = (a, b) => a.day === b.day && toMin(a.start) < toMin(b.start) + b.dur && toMin(b.start) < toMin(a.start) + a.dur;
@@ -242,7 +246,11 @@ const savePkg = (id, patch, msg) => run(sb.from('packages').update(toRow(patch, 
 async function setLog(pid, date, status, note, time, dur) {
   const e = entryFor(S.packages[pid], date);
   if (status == null) { if (e) await run(sb.from('lessons').delete().eq('id', e.id)); return; }
-  if (e) return run(sb.from('lessons').update(note != null ? { status, note } : { status }).eq('id', e.id));
+  if (e) {
+    const p = S.packages[pid]; const patch = note != null ? { status, note } : { status };
+    if (makesUp(p.studentId, p.teacherId, date, status) && !stats(p).owed) { const home = owingPkg(p.studentId, p.teacherId); if (home && home.id !== pid) patch.package_id = home.id; }
+    return run(sb.from('lessons').update(patch).eq('id', e.id), patch.package_id ? `Counted as the makeup owed on ${pkgRef(S.packages[patch.package_id]) || 'the previous package'}` : '');
+  }
   return run(sb.from('lessons').insert({ package_id: pid, lesson_date: date, status, note: note || '', start_time: time || null, dur: time ? dur || null : null }));
 }
 const slotRow = (tid, s) => ({ id: s.id, teacher_id: tid, day: s.day, start_time: s.start, dur: s.dur, student_id: s.studentId, label: s.label, status: s.status, note: s.note });
@@ -1072,7 +1080,9 @@ function drawPackage(id) {
     run(sb.from('lessons').update(patch).eq('id', lid)).then(() => { renderOverlay(true); if (cl.length) toast(`Saved, but it clashes: ${clashText(cl, p.teacherId)}`, 7000); }).catch(() => {}); });
   ov.querySelectorAll('[data-lgdel]').forEach(b => b.onclick = () => { const e = (p.log || []).find(x => x.id === b.dataset.lgdel); confirmBox(`Remove the "${ST[e?.s]?.label || ''}" mark on ${fmtD(e?.d)}? This is recorded in History.`, () => run(sb.from('lessons').delete().eq('id', b.dataset.lgdel), 'Mark removed'), 'Remove mark'); });
   $('#nlAdd').onclick = () => { const d = $('#nlD').value; if (!d) return toast('Pick a date'); if (entryFor(p, d)) return toast('A lesson is already logged on that date'); const nt = $('#nlT').value; const cl = nt ? clashesFor(p.teacherId, p.studentId, d, nt, defDur(p.studentId, p.teacherId)) : [];
-    run(sb.from('lessons').insert({ package_id: id, lesson_date: d, status: $('#nlS').value, note: $('#nlN').value.trim(), start_time: nt || null, dur: nt ? defDur(p.studentId, p.teacherId) : null }), cl.length ? '' : 'Lesson added').then(() => { renderOverlay(true); if (cl.length) toast(`Added, but it clashes: ${clashText(cl, p.teacherId)}`, 7000); }).catch(() => {}); };
+    const nst = $('#nlS').value; const home = makesUp(p.studentId, p.teacherId, d, nst) && !s.owed ? owingPkg(p.studentId, p.teacherId) : null; if (home && entryFor(home, d)) return toast('A lesson is already logged on that date');
+    if (home && home.id !== id) toast(`This makes up the lesson owed on ${pkgRef(home) || 'the previous package'}, so it goes there.`, 5000);
+    run(sb.from('lessons').insert({ package_id: home?.id || id, lesson_date: d, status: nst, note: $('#nlN').value.trim(), start_time: nt || null, dur: nt ? defDur(p.studentId, p.teacherId) : null }), cl.length ? '' : 'Lesson added').then(() => { renderOverlay(true); if (cl.length) toast(`Added, but it clashes: ${clashText(cl, p.teacherId)}`, 7000); }).catch(() => {}); };
   if (!A) return;
   $('#pSave').onclick = () => savePkg(id, { teacherId: $('#pT').value, kind: $('#pK').value, sessions: Math.max(1, +$('#pN').value || 1), perWeek: Math.max(1, Math.min(7, +$('#pW').value || 1)), start: $('#pS').value, end: $('#pE').value, term: $('#pTerm').value.trim(), subject: $('#pSub').value.trim(), payment: $('#pP').value, price: $('#pPr').value === '' ? null : +$('#pPr').value, paidNote: $('#pPn').value.trim(), notes: $('#pNo').value }, 'Package saved').then(() => renderOverlay(true)).catch(() => {});
   const stamp = what => `${what} ${fmtD(kwToday(), { day: 'numeric', month: 'short', year: 'numeric' })} by ${S.session.user.email}`;
@@ -1235,7 +1245,7 @@ function drawModal() {
      <label class="f">Date<input type="date" id="mD" value="${esc(ctx.date || kwToday())}"></label><label class="f">What happened<select id="mSs">${Object.entries(ST).map(([k, v]) => `<option value="${k}" ${k === 'makeup' ? 'selected' : ''}>${esc(v.label)}</option>`).join('')}</select></label>
      <label class="f">Time<input type="time" id="mTm" step="300"></label><label class="f">Length (min)<input type="number" id="mDu" min="5" max="240" step="5" value="45"></label></div>
      <label class="f">Note<input type="text" id="mNo" placeholder="e.g. makeup for 14 Sep"></label><div id="mInfo" class="small muted"></div><div id="mClash"></div><div class="row-end">${cancel}<button class="btn primary" id="mOk">Log lesson</button></div>`, true);
-    const info = () => { const sid = $('#mSt').value, tid = $('#mT').value; if (sid && !$('#mDu').dataset.touched) $('#mDu').value = defDur(sid, tid); const p = sid ? ($('#mSs').value === 'makeup' ? makeupPkg : pkgForDate)(sid, tid, $('#mD').value) : null; $('#mInfo').innerHTML = !sid ? '' : !p ? '<span style="color:var(--bad)">This student has no package with this teacher.</span>' : p.closed ? `Makes up a lesson owed from the previous package ${esc(pkgRef(p))} (${stats(p).owed} owed). It does not use a lesson from the new package.` : `Goes on the ${esc(KINDS[p.kind] || '')} package ${esc(pkgRef(p))}: ${stats(p).used} of ${stats(p).total} used, ${stats(p).owed} makeup owed.`; };
+    const info = () => { const sid = $('#mSt').value, tid = $('#mT').value; if (sid && !$('#mDu').dataset.touched) $('#mDu').value = defDur(sid, tid); const p = sid ? (makesUp(sid, tid, $('#mD').value, $('#mSs').value) ? makeupPkg : pkgForDate)(sid, tid, $('#mD').value) : null; $('#mInfo').innerHTML = !sid ? '' : !p ? '<span style="color:var(--bad)">This student has no package with this teacher.</span>' : p.closed ? `Makes up a lesson owed from the previous package ${esc(pkgRef(p))} (${stats(p).owed} owed). It does not use a lesson from the new package.` : `Goes on the ${esc(KINDS[p.kind] || '')} package ${esc(pkgRef(p))}: ${stats(p).used} of ${stats(p).total} used, ${stats(p).owed} makeup owed.`; };
     const check = () => {
       const sid = $('#mSt').value, tid = $('#mT').value, d = $('#mD').value, tm = $('#mTm').value, du = Math.max(5, Math.min(240, +$('#mDu').value || 45));
       if (!tid || !d) { $('#mClash').innerHTML = ''; return; }
@@ -1249,7 +1259,7 @@ function drawModal() {
     ['mT', 'mSt', 'mD'].forEach(i => $('#' + i).onchange = () => { info(); check(); }); $('#mSs').onchange = info; $('#mDu').oninput = e => { e.target.dataset.touched = '1'; check(); }; $('#mTm').oninput = check; $('#mTm').onchange = check; check();
     $('#mOk').onclick = async () => {
       const sid = $('#mSt').value, tid = $('#mT').value, d = $('#mD').value; if (!sid || !d) return toast('Choose a student and date');
-      const st = $('#mSs').value; const p = (st === 'makeup' ? makeupPkg : pkgForDate)(sid, tid, d); if (!p) return toast('This student has no package with this teacher');
+      const st = $('#mSs').value; const p = (makesUp(sid, tid, d, st) ? makeupPkg : pkgForDate)(sid, tid, d); if (!p) return toast('This student has no package with this teacher');
       if (pairPkgs(sid, tid).some(x => entryFor(x, d))) return toast('A lesson is already logged for that date. Edit it in the package.');
       const no = $('#mNo').value.trim(), tm = $('#mTm').value || null, du = Math.max(5, Math.min(240, +$('#mDu').value || 45)); closeOverlay();
       await setLog(p.id, d, st, no, tm, du).then(() => toast('Lesson logged')).catch(() => {});
