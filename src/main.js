@@ -142,6 +142,11 @@ function pkgForDate(sid, tid, date) {
   const open = all.filter(p => !p.closed).sort((a, b) => (a.start || '').localeCompare(b.start || ''));
   return open.find(p => stats(p).left > 0) || open.at(-1) || null;
 }
+// Makeups owed on packages that were renewed (closed) with this teacher. They stay owed until made up.
+const carriedOwed = (sid, tid) => pairPkgs(sid, tid).filter(p => p.closed && stats(p).owed > 0).sort((a, b) => (a.start || '').localeCompare(b.start || ''));
+// Where a makeup lesson should be logged: the oldest package that still owes one, even if it was renewed. Otherwise the usual package.
+const makeupPkg = (sid, tid, date) => pairPkgs(sid, tid).filter(p => stats(p).owed > 0).sort((a, b) => (a.start || '').localeCompare(b.start || ''))[0] || pkgForDate(sid, tid, date);
+const owedTotal = (sid, tid) => pairPkgs(sid, tid).reduce((a, p) => a + stats(p).owed, 0);
 const entryFor = (p, date) => p ? (p.log || []).find(e => e.d === date) : null;
 const overlaps = (a, b) => a.day === b.day && toMin(a.start) < toMin(b.start) + b.dur && toMin(b.start) < toMin(a.start) + a.dur;
 function studentSlots(sid) { const out = []; for (const t of teacherIds()) for (const s of slotsOf(t)) if (s.studentId === sid) out.push({ ...s, teacherId: t }); return out.sort((a, b) => a.day - b.day || toMin(a.start) - toMin(b.start)); }
@@ -339,7 +344,8 @@ function attention() {
   const today = kwToday(); const items = []; const pk = pkgList();
   const fin = [], low = [], owed = [], unpaid = [], over = [];
   for (const p of pk) {
-    if (p.closed) continue; const s = stats(p);
+    if (p.closed) { const s = stats(p); if (s.owed > 0 && pk.some(o => !o.closed && o.studentId === p.studentId && o.teacherId === p.teacherId)) owed.push([p, s]); continue; }
+    const s = stats(p);
     if (s.used > s.total) over.push([p, s]); else if (s.state === 'finished') fin.push([p, s]); else if (s.state === 'low') low.push([p, s]);
     if (s.owed > 0) owed.push([p, s]); if (p.payment && p.payment !== 'paid') unpaid.push([p, s]);
   }
@@ -370,7 +376,7 @@ function attention() {
   add(endedL.length, 'bad', 'Package end date has passed', pk2(endedL, (p, s) => `ended ${esc(fmtD(p.end))}${s.left > 0 ? ` with ${s.left} lessons left` : ''}`));
   add(endingL.length, 'warn', 'Packages ending this week', pk2(endingL, p => `ends ${esc(fmtD(p.end))}`));
   add(unmarked.length, 'warn', 'Lessons not marked (last 2 weeks)', unmarked.slice(0, 40).map(u => `<li><a data-goto-date="${u.d}">${esc(fmtD(u.d))}</a> · ${fmtT(u.start)} · ${esc(sname(u.sid))} · ${esc(tname(u.t))}</li>`).join('') + (unmarked.length > 40 ? `<li>and ${unmarked.length - 40} more</li>` : ''));
-  add(owed.length, 'vio', 'Makeup lessons owed', pk2(owed, (p, s) => `${s.owed} owed`));
+  add(owed.length, 'vio', 'Makeup lessons owed', pk2(owed, (p, s) => `${s.owed} owed${p.closed ? ` from the previous package ${pkgRef(p)}` : ''}`));
   add(unpaid.length, 'bad', 'Payment outstanding', pk2(unpaid, p => esc(PAY[p.payment]?.[0] || p.payment)));
   add(noPkg.length, 'warn', 'On the timetable with no open package', noPkg.map(([sl, t]) => `<li>${esc(sname(sl.studentId))} · ${esc(tname(t))} · ${DS[sl.day]} ${fmtT(sl.start)}${isAdmin() ? ` <a data-new-pkg="${esc(sl.studentId)}|${esc(t)}">add package</a>` : ''}</li>`).join(''));
   add(noSlot.length, 'blue', 'Open package but no weekly time', noSlot.map(p => `<li><a data-open-pkg="${esc(p.id)}">${esc(sname(p.studentId))}</a> · ${esc(tname(p.teacherId))}</li>`).join(''));
@@ -397,7 +403,7 @@ function renderToday() {
       const end = toMin(s.start) + s.dur;
       if (!s.studentId) return [toMin(s.start), `<div class="lesson blocked"><span class="time">${fmtTs(s.start)}–${fmtTs(end)}</span><span>${esc(s.label || 'Reserved')}${s.status === 'tentative' ? ' · not confirmed' : ''}</span><span></span></div>`];
       const p = pkgForDate(s.studentId, t, d); const e = entryFor(p, d); const st = p ? stats(p) : null;
-      const info = p ? `${KINDS[p.kind] || ''} · ${st.used} of ${st.total} used${st.left <= 0 ? ' · <span style="color:var(--bad)">finished</span>' : st.state === 'low' ? ` · <span style="color:var(--warn)">${st.left} left</span>` : ''}${st.owed ? ` · ${st.owed} makeup owed` : ''}` : '<span style="color:var(--bad)">No open package</span>';
+      const info = p ? `${KINDS[p.kind] || ''} · ${st.used} of ${st.total} used${st.left <= 0 ? ' · <span style="color:var(--bad)">finished</span>' : st.state === 'low' ? ` · <span style="color:var(--warn)">${st.left} left</span>` : ''}${owedTotal(s.studentId, t) ? ` · ${owedTotal(s.studentId, t)} makeup owed` : ''}` : '<span style="color:var(--bad)">No open package</span>';
       const seg = p ? segButtons(p.id, d, e?.s, ['present', 'absent', 'noshow', 'cancelled']) : (isAdmin() ? `<button class="btn sm" data-new-pkg="${esc(s.studentId)}|${esc(t)}">Add package</button>` : '<span></span>');
       return [toMin(s.start), `<div class="lesson"><span class="time">${fmtTs(s.start)}–${fmtTs(end)}</span><div class="who"><b class="namecell">${avatar('student', s.studentId, 26)}<a style="color:inherit;cursor:pointer" ${p ? `data-open-pkg="${esc(p.id)}"` : `data-open-stu="${esc(s.studentId)}"`}>${esc(sname(s.studentId))}</a></b>${s.status === 'tentative' ? ' <span class="pill warn">not confirmed</span>' : ''}<span class="small muted">${info}${e?.n ? ` · ${esc(e.n)}` : ''}</span></div>${seg}</div>`];
     });
@@ -1028,6 +1034,7 @@ function drawPackage(id) {
   shell(sname(p.studentId), `${refTag(p)} ${esc(tname(p.teacherId))} · ${esc(KINDS[p.kind] || '')} package${p.term ? ' · ' + esc(p.term) : ''}`, `
    <div class="namecell" style="gap:10px">${avatar('student', p.studentId, 44)}${avatar('teacher', p.teacherId, 32)}</div>
    ${p.closed ? '<div class="infobox">This package is closed. It is kept for history.</div>' : s.used > s.total ? `<div class="badbox">${s.used - s.total} lesson(s) used beyond the package. Renew and move the extra lessons, or adjust the size.</div>` : s.state === 'finished' ? '<div class="badbox">All lessons used. Renew to keep marking attendance.</div>' : ''}
+   ${!p.closed ? carriedOwed(p.studentId, p.teacherId).map(o => `<div class="infobox">${stats(o).owed} makeup${stats(o).owed === 1 ? '' : 's'} still owed from the previous package <a data-open-pkg="${esc(o.id)}">${esc(pkgRef(o) || 'package')}</a>. Use “Log makeup or extra” and it goes on that package, without using a lesson from this one.</div>`).join('') : s.owed ? `<div class="infobox">${s.owed} makeup${s.owed === 1 ? '' : 's'} still owed on this package. Use “Log makeup or extra” to book ${s.owed === 1 ? 'it' : 'them'}; ${s.owed === 1 ? 'it goes' : 'they go'} on this package.</div>` : ''}
    ${s.ended ? `<div class="warnbox">This package's end date (${esc(fmtD(p.end))}) has passed${s.left > 0 ? ` with ${s.left} lessons not used` : ''}. Renew or close it.</div>` : ''}
    <div class="row-end" style="justify-content:flex-start;margin-bottom:-4px"><button class="btn sm" data-att-report="${esc(p.studentId)}|${esc(id)}">📄 Attendance report for parents</button></div>
    <div class="stats"><div class="stat"><b>${s.used}</b><span>used of ${s.total}</span></div><div class="stat"><b style="color:${s.left <= 0 ? 'var(--bad)' : s.state === 'low' ? 'var(--warn)' : 'inherit'}">${s.left}</b><span>left</span></div><div class="stat"><b>${s.owed}</b><span>makeups owed</span></div><div class="stat"><b>${s.c.absent + s.c.cancelled}</b><span>missed</span></div></div>
@@ -1087,9 +1094,10 @@ function studentSummary(id) {
     const times = ts.length ? ts.map(x => `<li>${DAYS[x.day]} ${fmtTs(x.start)}–${fmtT(toMin(x.start) + x.dur)}${x.status === 'tentative' ? ' <span class="pill warn">not confirmed</span>' : ''}</li>`).join('') : '<li class="muted">No weekly time on the timetable yet</li>';
     const warn = ps.length && ts.length && ts.length !== perWeek ? `<div class="small" style="color:var(--warn)">The package says ${perWeek}× a week but the timetable has ${ts.length} weekly time${ts.length === 1 ? '' : 's'}.</div>` : '';
     const pk = ps.map(p => { const st = stats(p); return `<div class="small" style="display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;cursor:pointer" data-open-pkg="${esc(p.id)}">${refTag(p)}<b>${esc(KINDS[p.kind] || p.kind)} package</b>${p.term ? `<span class="muted">${esc(p.term)}</span>` : ''}<span>${st.total} lessons · ${st.used} used · <b style="color:${st.left <= 0 ? 'var(--bad)' : st.state === 'low' ? 'var(--warn)' : 'inherit'}">${st.left} left</b></span>${st.owed ? `<span class="pill vio">${st.owed} makeup owed</span>` : ''}<span class="pill ${PAY[p.payment]?.[1] || ''}">${esc(PAY[p.payment]?.[0] || p.payment)}</span>${p.start || p.end ? `<span class="muted">${p.start ? esc(fmtD(p.start, { day: 'numeric', month: 'short', year: 'numeric' })) : ''} → ${p.end ? esc(fmtD(p.end, { day: 'numeric', month: 'short', year: 'numeric' })) : 'no end date'}</span>` : ''}</div>`; }).join('') || '<div class="small" style="color:var(--bad)">No open package with this teacher</div>';
-    const upcoming = ps.flatMap(p => (p.log || []).filter(e => e.d >= today && e.s === 'makeup').map(e => `<li>${esc(fmtD(e.d))}${e.t ? ` ${fmtTs(e.t)}–${fmtT(toMin(e.t) + (e.du || defDur(id, tid)))}` : ' (no time set)'}</li>`)).join('');
+    const carried = carriedOwed(id, tid).map(o => `<div class="small" style="cursor:pointer;margin-top:4px" data-open-pkg="${esc(o.id)}"><span class="pill vio">${stats(o).owed} makeup owed</span> from the previous package ${refTag(o)}</div>`).join('');
+    const upcoming = pairPkgs(id, tid).flatMap(p => (p.log || []).filter(e => e.d >= today && e.s === 'makeup').map(e => `<li>${esc(fmtD(e.d))}${e.t ? ` ${fmtTs(e.t)}–${fmtT(toMin(e.t) + (e.du || defDur(id, tid)))}` : ' (no time set)'}</li>`)).join('');
     return `<div class="card" style="padding:12px 14px;border-left:4px solid ${esc(tcolor(tid))}"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${avatar('teacher', tid, 24)}<b>${esc(tname(tid))}</b><span class="muted small">${esc(head)}</span></div>
-      <ul class="small" style="margin:6px 0;padding-left:18px">${times}</ul>${warn}${pk}${upcoming ? `<div class="small" style="margin-top:6px"><b>Upcoming makeups</b><ul style="margin:2px 0 0;padding-left:18px">${upcoming}</ul></div>` : ''}</div>`;
+      <ul class="small" style="margin:6px 0;padding-left:18px">${times}</ul>${warn}${pk}${carried}${upcoming ? `<div class="small" style="margin-top:6px"><b>Upcoming makeups</b><ul style="margin:2px 0 0;padding-left:18px">${upcoming}</ul></div>` : ''}</div>`;
   }).join('');
 }
 function drawStudent(id) {
@@ -1227,7 +1235,7 @@ function drawModal() {
      <label class="f">Date<input type="date" id="mD" value="${esc(ctx.date || kwToday())}"></label><label class="f">What happened<select id="mSs">${Object.entries(ST).map(([k, v]) => `<option value="${k}" ${k === 'makeup' ? 'selected' : ''}>${esc(v.label)}</option>`).join('')}</select></label>
      <label class="f">Time<input type="time" id="mTm" step="300"></label><label class="f">Length (min)<input type="number" id="mDu" min="5" max="240" step="5" value="45"></label></div>
      <label class="f">Note<input type="text" id="mNo" placeholder="e.g. makeup for 14 Sep"></label><div id="mInfo" class="small muted"></div><div id="mClash"></div><div class="row-end">${cancel}<button class="btn primary" id="mOk">Log lesson</button></div>`, true);
-    const info = () => { const sid = $('#mSt').value, tid = $('#mT').value; if (sid && !$('#mDu').dataset.touched) $('#mDu').value = defDur(sid, tid); const p = sid ? pkgForDate(sid, tid, $('#mD').value) : null; $('#mInfo').innerHTML = !sid ? '' : p ? `Goes on the ${esc(KINDS[p.kind] || '')} package: ${stats(p).used} of ${stats(p).total} used, ${stats(p).owed} makeup owed.` : '<span style="color:var(--bad)">This student has no package with this teacher.</span>'; };
+    const info = () => { const sid = $('#mSt').value, tid = $('#mT').value; if (sid && !$('#mDu').dataset.touched) $('#mDu').value = defDur(sid, tid); const p = sid ? ($('#mSs').value === 'makeup' ? makeupPkg : pkgForDate)(sid, tid, $('#mD').value) : null; $('#mInfo').innerHTML = !sid ? '' : !p ? '<span style="color:var(--bad)">This student has no package with this teacher.</span>' : p.closed ? `Makes up a lesson owed from the previous package ${esc(pkgRef(p))} (${stats(p).owed} owed). It does not use a lesson from the new package.` : `Goes on the ${esc(KINDS[p.kind] || '')} package ${esc(pkgRef(p))}: ${stats(p).used} of ${stats(p).total} used, ${stats(p).owed} makeup owed.`; };
     const check = () => {
       const sid = $('#mSt').value, tid = $('#mT').value, d = $('#mD').value, tm = $('#mTm').value, du = Math.max(5, Math.min(240, +$('#mDu').value || 45));
       if (!tid || !d) { $('#mClash').innerHTML = ''; return; }
@@ -1238,12 +1246,12 @@ function drawModal() {
       $('#mClash').querySelectorAll('[data-gap]').forEach(b => b.onclick = () => { $('#mTm').value = b.dataset.gap; check(); });
       $('#mOk').textContent = cl.length ? 'Log anyway' : 'Log lesson';
     };
-    ['mT', 'mSt', 'mD'].forEach(i => $('#' + i).onchange = () => { info(); check(); }); $('#mDu').oninput = e => { e.target.dataset.touched = '1'; check(); }; $('#mTm').oninput = check; $('#mTm').onchange = check; check();
+    ['mT', 'mSt', 'mD'].forEach(i => $('#' + i).onchange = () => { info(); check(); }); $('#mSs').onchange = info; $('#mDu').oninput = e => { e.target.dataset.touched = '1'; check(); }; $('#mTm').oninput = check; $('#mTm').onchange = check; check();
     $('#mOk').onclick = async () => {
       const sid = $('#mSt').value, tid = $('#mT').value, d = $('#mD').value; if (!sid || !d) return toast('Choose a student and date');
-      const p = pkgForDate(sid, tid, d); if (!p) return toast('This student has no package with this teacher');
-      if (entryFor(p, d)) return toast('A lesson is already logged for that date. Edit it in the package.');
-      const st = $('#mSs').value, no = $('#mNo').value.trim(), tm = $('#mTm').value || null, du = Math.max(5, Math.min(240, +$('#mDu').value || 45)); closeOverlay();
+      const st = $('#mSs').value; const p = (st === 'makeup' ? makeupPkg : pkgForDate)(sid, tid, d); if (!p) return toast('This student has no package with this teacher');
+      if (pairPkgs(sid, tid).some(x => entryFor(x, d))) return toast('A lesson is already logged for that date. Edit it in the package.');
+      const no = $('#mNo').value.trim(), tm = $('#mTm').value || null, du = Math.max(5, Math.min(240, +$('#mDu').value || 45)); closeOverlay();
       await setLog(p.id, d, st, no, tm, du).then(() => toast('Lesson logged')).catch(() => {});
     };
   } else if (kind === 'resched') {
@@ -1267,7 +1275,7 @@ function drawModal() {
       const d = $('#mD').value, tm = $('#mTm').value || null, du = Math.max(5, Math.min(240, +$('#mDu').value || 45));
       if (!d) return toast('Pick a date'); if (isPast(d)) return toast('Pick today or a later date');
       if (d === e.d && tm === (e.t || null) && du === (e.du || defDur(sid, tid))) return closeOverlay();
-      if (d !== e.d && entryFor(p, d)) return toast('A lesson is already logged for that date');
+      if (d !== e.d && pairPkgs(sid, tid).some(x => entryFor(x, d))) return toast('A lesson is already logged for that date');
       if (d !== e.d && slotsOf(tid).some(x => x.studentId === sid && x.day === wd(d))) return toast(`${sname(sid)} already has a weekly lesson with ${tname(tid)} on ${DAYS[wd(d)]}s. Pick another day.`);
       const moved = d !== e.d ? `Moved from ${fmtD(e.d)}` : ''; const note = moved ? [e.n, moved].filter(Boolean).join(' · ') : e.n || '';
       closeOverlay();
