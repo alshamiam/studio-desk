@@ -184,7 +184,7 @@ function slotOffOn(tid, s, date) { if (!s.studentId) return null; const e = entr
 function busyOn(tid, date, skipId) {
   const w = wd(date); const out = [];
   for (const s of slotsOf(tid)) if (s.day === w && !slotOffOn(tid, s, date)) out.push({ tid, start: toMin(s.start), end: toMin(s.start) + s.dur, sid: s.studentId, what: s.studentId ? sname(s.studentId) : (s.label || 'Reserved') });
-  for (const x of datedLessons(tid, date, date)) if (x.e.t && x.e.id !== skipId) out.push({ tid, start: toMin(x.e.t), end: toMin(x.e.t) + x.dur, sid: x.p.studentId, what: `${sname(x.p.studentId)} (${x.e.s === 'makeup' ? 'makeup' : 'extra'})` });
+  for (const x of datedLessons(tid, date, date)) if (x.e.t && x.e.id !== skipId) out.push({ tid, start: toMin(x.e.t), end: toMin(x.e.t) + x.dur, sid: x.p.studentId, what: `${sname(x.p.studentId)} (${x.p.kind === 'trial' ? 'trial' : x.e.s === 'makeup' ? 'makeup' : 'extra'})` });
   return out.sort((a, b) => a.start - b.start);
 }
 // What a one-off lesson at this time would overlap: the teacher's other lessons, and the student's lessons with other teachers.
@@ -401,6 +401,8 @@ function attention() {
   add(owed.length, 'vio', 'Makeup lessons owed', pk2(owed, (p, s) => `${s.owed} owed${p.closed ? ` from the previous package ${pkgRef(p)}` : ''}`));
   add(unpaid.length, 'bad', 'Payment outstanding', pk2(unpaid, p => esc(PAY[p.payment]?.[0] || p.payment)));
   add(noPkg.length, 'warn', 'On the timetable with no open package', noPkg.map(([sl, t]) => `<li>${esc(sname(sl.studentId))} · ${esc(tname(t))} · ${DS[sl.day]} ${fmtT(sl.start)}${isAdmin() ? ` <a data-new-pkg="${esc(sl.studentId)}|${esc(t)}">add package</a>` : ''}</li>`).join(''));
+  const trialNoTime = pk.filter(p => !p.closed && p.kind === 'trial' && !(p.log || []).length);
+  add(trialNoTime.length, 'warn', 'Trial with no date and time booked', trialNoTime.map(p => `<li><a data-open-pkg="${esc(p.id)}">${esc(sname(p.studentId))}</a> · ${esc(tname(p.teacherId))}${isAdmin() ? ` <a data-book-trial="${esc(p.id)}">book time</a>` : ''}</li>`).join(''));
   add(noSlot.length, 'blue', 'Open package but no weekly time', noSlot.map(p => `<li><a data-open-pkg="${esc(p.id)}">${esc(sname(p.studentId))}</a> · ${esc(tname(p.teacherId))}</li>`).join(''));
   add(tent.length, 'warn', 'Times not confirmed yet', tent.map(([sl, t]) => `<li>${esc(slotLabel(sl))} · ${esc(tname(t))} · ${DS[sl.day]} ${fmtT(sl.start)}</li>`).join(''));
   add(forms.length, 'blue', 'Registration forms not signed', forms.map(id => `<li><a data-open-stu="${esc(id)}">${esc(sname(id))}</a> · ${esc(FORM[S.students[id].regForm]?.[0] || '')}</li>`).join(''));
@@ -429,7 +431,7 @@ function renderToday() {
       const seg = p ? segButtons(p.id, d, e?.s, ['present', 'absent', 'noshow', 'cancelled']) : (isAdmin() ? `<button class="btn sm" data-new-pkg="${esc(s.studentId)}|${esc(t)}">Add package</button>` : '<span></span>');
       return [toMin(s.start), `<div class="lesson"><span class="time">${fmtTs(s.start)}–${fmtTs(end)}</span><div class="who"><b class="namecell">${avatar('student', s.studentId, 26)}<a style="color:inherit;cursor:pointer" ${p ? `data-open-pkg="${esc(p.id)}"` : `data-open-stu="${esc(s.studentId)}"`}>${esc(sname(s.studentId))}</a></b>${s.status === 'tentative' ? ' <span class="pill warn">not confirmed</span>' : ''}<span class="small muted">${info}${e?.n ? ` · ${esc(e.n)}` : ''}</span></div>${seg}</div>`];
     });
-    rows = rows.concat(extras.map(p => { const e = entryFor(p, d); const st = stats(p); const du = e.du || defDur(p.studentId, t); return [e.t ? toMin(e.t) : 24 * 60, `<div class="lesson"><span class="time">${e.t ? `${fmtTs(e.t)}–${fmtTs(toMin(e.t) + du)}` : 'extra'}</span><div class="who"><b class="namecell">${avatar('student', p.studentId, 26)}<a style="color:inherit;cursor:pointer" data-open-pkg="${esc(p.id)}">${esc(sname(p.studentId))}</a></b> ${p.kind === 'trial' ? `<span class="pill blue">${isPast(d) ? 'Trial lesson' : 'Trial booked'}</span>` : e.s === 'makeup' ? `<span class="pill blue">${isPast(d) ? 'Makeup' : 'Makeup booked'}</span>` : '<span class="pill">Makeup or extra</span>'}<span class="small muted">${st.used} of ${st.total} used${e.n ? ` · ${esc(e.n)}` : ''}</span>${e.s === 'makeup' && !isPast(d) ? `<button class="btn sm ghost" style="margin-top:4px" data-resched="${esc(p.id)}|${esc(e.id)}">↻ Reschedule</button>` : ''}</div>${segButtons(p.id, d, e.s, ['present', 'absent', 'noshow', 'cancelled'], p.kind === 'trial' ? 'present' : 'makeup')}</div>`]; })).sort((a, b) => a[0] - b[0]).map(r => r[1]).join('');
+    rows = rows.concat(extras.map(p => { const e = entryFor(p, d); const st = stats(p); const du = e.du || defDur(p.studentId, t); return [e.t ? toMin(e.t) : 24 * 60, `<div class="lesson"><span class="time">${e.t ? `${fmtTs(e.t)}–${fmtTs(toMin(e.t) + du)}` : 'extra'}</span><div class="who"><b class="namecell">${avatar('student', p.studentId, 26)}<a style="color:inherit;cursor:pointer" data-open-pkg="${esc(p.id)}">${esc(sname(p.studentId))}</a></b> ${p.kind === 'trial' ? `<span class="pill blue">${isPast(d) ? 'Trial lesson' : 'Trial booked'}</span>` : e.s === 'makeup' ? `<span class="pill blue">${isPast(d) ? 'Makeup' : 'Makeup booked'}</span>` : '<span class="pill">Makeup or extra</span>'}<span class="small muted">${st.used} of ${st.total} used${e.n ? ` · ${esc(e.n)}` : ''}</span>${(e.s === 'makeup' || p.kind === 'trial') && !isPast(d) ? `<button class="btn sm ghost" style="margin-top:4px" data-resched="${esc(p.id)}|${esc(e.id)}">↻ Reschedule</button>` : ''}</div>${segButtons(p.id, d, e.s, ['present', 'absent', 'noshow', 'cancelled'], p.kind === 'trial' ? 'present' : 'makeup')}</div>`]; })).sort((a, b) => a[0] - b[0]).map(r => r[1]).join('');
     body += `<section class="tgroup"><h3>${avatar('teacher', t, 30)}${esc(tname(t))}</h3><div class="card">${rows}</div></section>`;
   }
   if (!any) body = `<div class="card empty">No lessons on the timetable for ${DAYS[w]}s.<br><span class="small">Use “Log makeup or extra” to record a lesson on this day.</span></div>`;
@@ -437,11 +439,12 @@ function renderToday() {
   const attn = items.length ? items.map(it => `<div class="attn-item"><span class="n pill ${it.tone}">${it.n}</span><details><summary>${esc(it.title)}</summary><ul>${it.list}</ul></details></div>`).join('') : '<p class="muted small">Nothing needs attention.</p>';
   $('#view').innerHTML = `
   <div class="bar"><div class="daynav"><span class="big">${isToday ? 'Today' : esc(DAYS[w])}</span><span class="muted">${esc(fmtD(d, { weekday: 'long', day: 'numeric', month: 'long' }))}</span></div>
-   <span style="margin-left:auto" class="daynav"><button class="btn sm" data-day="-1" aria-label="Previous day">‹ Prev</button><input type="date" id="daypick" value="${d}" aria-label="Date"><button class="btn sm" data-day="1" aria-label="Next day">Next ›</button>${isToday ? '' : '<button class="btn sm" data-day="0">Today</button>'}<button class="btn primary sm" id="logExtra">Log makeup or extra</button></span></div>
+   <span style="margin-left:auto" class="daynav"><button class="btn sm" data-day="-1" aria-label="Previous day">‹ Prev</button><input type="date" id="daypick" value="${d}" aria-label="Date"><button class="btn sm" data-day="1" aria-label="Next day">Next ›</button>${isToday ? '' : '<button class="btn sm" data-day="0">Today</button>'}${isAdmin() ? '<button class="btn sm" id="bookTrial">Book trial</button>' : ''}<button class="btn primary sm" id="logExtra">Log makeup or extra</button></span></div>
   <div class="layout-today"><div>${body}</div><aside class="card attn"><h3>Needs attention</h3>${attn}</aside></div>`;
   $('#daypick').onchange = e => { if (e.target.value) { S.date = e.target.value; render(); } };
   document.querySelectorAll('[data-day]').forEach(b => b.onclick = () => { const n = +b.dataset.day; S.date = n === 0 ? kwToday() : addDays(S.date, n); render(); });
   $('#logExtra').onclick = () => openModal('extra', { date: d });
+  if ($('#bookTrial')) $('#bookTrial').onclick = () => openModal('trial', { date: isPast(d) ? kwToday() : d });
 }
 
 /* ---------- WEEK ---------- */
@@ -478,10 +481,10 @@ function renderWeek() {
     const d = wd(x.e.d); const i = days.indexOf(d); if (i < 0) continue;
     const r0 = (toMin(x.e.t) - lo) / 15 + 2; const span = Math.max(1, Math.round(x.dur / 15));
     const clashes = clashesFor(t, x.p.studentId, x.e.d, x.e.t, x.dur, x.e.id); const clash = clashes.length > 0;
-    const kind = x.e.s === 'makeup' ? 'Makeup' : ST[x.e.s]?.seg || 'Extra'; const tm = `${fmtTs(x.e.t)}–${fmtTs(toMin(x.e.t) + x.dur)}`;
+    const kind = x.p.kind === 'trial' ? 'Trial' : x.e.s === 'makeup' ? 'Makeup' : ST[x.e.s]?.seg || 'Extra'; const tm = `${fmtTs(x.e.t)}–${fmtTs(toMin(x.e.t) + x.dur)}`;
     g += `<button class="blk once ${clash ? 'conflict' : ''} ${span === 1 ? 'short' : ''}" style="grid-column:${i + 2};grid-row:${Math.floor(r0)} / span ${span}" data-open-pkg="${esc(x.p.id)}" title="${esc(`${kind}: ${sname(x.p.studentId)}, ${fmtD(x.e.d)} ${fmtT(x.e.t)}${x.e.n ? ' — ' + x.e.n : ''}${clash ? ' — Clash: ' + clashText(clashes, t) : ''}`)}">${span === 1 ? `<span class="one"><b>${esc(kind)} · ${esc(sname(x.p.studentId))}</b> <span class="bt">${tm}</span></span>` : `<span class="bt">${tm} · ${esc(kind)}</span><b>${esc(sname(x.p.studentId))}</b>`}</button>`;
   }
-  const onceList = once.length ? `<div class="card" style="padding:12px 14px;margin-top:16px"><div class="eyebrow">Makeups and extra lessons this week</div><ul class="small" style="margin:6px 0 0;padding-left:18px">${once.map(x => `<li><a data-goto-date="${x.e.d}">${esc(fmtD(x.e.d))}</a> · ${x.e.t ? `${fmtT(x.e.t)}–${fmtT(toMin(x.e.t) + x.dur)}` : '<span style="color:var(--warn)">no time set</span>'} · <a data-open-pkg="${esc(x.p.id)}">${esc(sname(x.p.studentId))}</a> · ${esc(ST[x.e.s]?.label || x.e.s)}${x.e.n ? ` · ${esc(x.e.n)}` : ''}${x.e.s === 'makeup' && !isPast(x.e.d) ? ` · <a data-resched="${esc(x.p.id)}|${esc(x.e.id)}">Reschedule</a>` : ''}</li>`).join('')}</ul></div>` : '';
+  const onceList = once.length ? `<div class="card" style="padding:12px 14px;margin-top:16px"><div class="eyebrow">Trials, makeups and extra lessons this week</div><ul class="small" style="margin:6px 0 0;padding-left:18px">${once.map(x => `<li><a data-goto-date="${x.e.d}">${esc(fmtD(x.e.d))}</a> · ${x.e.t ? `${fmtT(x.e.t)}–${fmtT(toMin(x.e.t) + x.dur)}` : '<span style="color:var(--warn)">no time set</span>'} · <a data-open-pkg="${esc(x.p.id)}">${esc(sname(x.p.studentId))}</a> · ${esc(ST[x.e.s]?.label || x.e.s)}${x.e.n ? ` · ${esc(x.e.n)}` : ''}${x.e.s === 'makeup' && !isPast(x.e.d) ? ` · <a data-resched="${esc(x.p.id)}|${esc(x.e.id)}">Reschedule</a>` : ''}</li>`).join('')}</ul></div>` : '';
   // Teaching time = every slot that is not a break/unavailable (lessons, group classes, reserved slots).
   // Overlapping slots are merged so clashes are not counted twice. Unconfirmed slots are reported separately.
   const unionMin = list => { const iv = list.map(x => [toMin(x.start), toMin(x.start) + x.dur]).sort((a, b) => a[0] - b[0]); let tot = 0, cs = -1, ce = -1; for (const [a, b] of iv) { if (a > ce) { if (ce > cs) tot += ce - cs; cs = a; ce = b; } else ce = Math.max(ce, b); } if (ce > cs) tot += ce - cs; return tot; };
@@ -500,7 +503,7 @@ function renderWeek() {
   $('#view').innerHTML = `
   <div class="bar"><h2>Timetable</h2><div class="tchips">${tids.map(id => `<button class="tchip" aria-pressed="${id === t}" data-wt="${esc(id)}">${avatar('teacher', id, 24)}${esc(tname(id))}</button>`).join('')}</div></div>
   <div class="bar daynav"><span class="big">${ws === weekOf(today) ? 'This week' : 'Week of ' + esc(fmtD(ws, { day: 'numeric', month: 'long' }))}</span><span class="muted">${esc(fmtD(ws, { day: 'numeric', month: 'short' }))} – ${esc(fmtD(addDays(ws, 6), { day: 'numeric', month: 'short', year: 'numeric' }))}</span>
-   <span style="margin-left:auto" class="daynav"><button class="btn sm" data-wk="-1" aria-label="Previous week">‹ Prev</button><input type="date" id="wkpick" value="${ws}" aria-label="Week"><button class="btn sm" data-wk="1" aria-label="Next week">Next ›</button>${ws === weekOf(today) ? '' : '<button class="btn sm" data-wk="0">This week</button>'}<button class="btn primary sm" id="wkLog">Log makeup or extra</button></span></div>
+   <span style="margin-left:auto" class="daynav"><button class="btn sm" data-wk="-1" aria-label="Previous week">‹ Prev</button><input type="date" id="wkpick" value="${ws}" aria-label="Week"><button class="btn sm" data-wk="1" aria-label="Next week">Next ›</button>${ws === weekOf(today) ? '' : '<button class="btn sm" data-wk="0">This week</button>'}${isAdmin() ? '<button class="btn sm" id="wkTrial">Book trial</button>' : ''}<button class="btn primary sm" id="wkLog">Log makeup or extra</button></span></div>
   <p class="muted small" style="margin:-6px 0 12px"><b style="color:var(--ink)">${hrs(weekConf)}</b> teaching a week · ${conf.length} weekly lessons${weekAll > weekConf ? ` · <span style="color:var(--warn)">+ ${hrs(weekAll - weekConf)} not confirmed</span>` : ''}.${editable ? ' Click an empty time to add a lesson; click a lesson to change or remove it.' : ''}</p>
   <div class="wk-wrap"><div class="wk" style="grid-template-columns:62px repeat(${days.length},minmax(104px,1fr));grid-template-rows:auto repeat(${rows},var(--row))">${g}</div></div>
   <div class="legend"><span><i class="sw" style="background:${esc(tcolor(t))}"></i>Confirmed</span><span><i class="sw" style="background:repeating-linear-gradient(135deg,var(--warn-soft) 0 4px,var(--surface) 4px 7px);outline:1px dashed var(--warn)"></i>Not confirmed</span><span><i class="sw" style="background:var(--brk-bg);border-left:3px solid var(--gold)"></i>Break or unavailable</span><span><i class="sw" style="background:var(--blue)"></i>Makeup or extra (this date only)</span><span><i class="sw" style="background:var(--muted);opacity:.45"></i>Absent or cancelled this week</span><span><i class="sw" style="outline:2px solid var(--bad)"></i>Clash</span></div>
@@ -511,6 +514,7 @@ function renderWeek() {
   document.querySelectorAll('[data-wk]').forEach(b => b.onclick = () => { const n = +b.dataset.wk; S.weekStart = n === 0 ? null : addDays(ws, 7 * n); render(); });
   $('#wkpick').onchange = e => { if (e.target.value) { S.weekStart = weekOf(e.target.value); render(); } };
   $('#wkLog').onclick = () => openModal('extra', { date: ws <= today && today <= addDays(ws, 6) ? today : ws, teacherId: t });
+  if ($('#wkTrial')) $('#wkTrial').onclick = () => openModal('trial', { date: ws <= today && today <= addDays(ws, 6) ? today : ws < today ? today : ws, teacherId: t });
 }
 
 /* ---------- PACKAGES / ATTENDANCE ---------- */
@@ -1082,7 +1086,7 @@ function drawPackage(id) {
     <label class="f">Price (KWD)<input type="number" min="0" step="0.001" id="pPr" value="${esc(p.price ?? '')}" ${dis}></label>
     <label class="f">Payment note<input type="text" id="pPn" value="${esc(p.paidNote || '')}" ${dis}></label>
    </div><label class="f">Notes<textarea id="pNo" ${dis}>${esc(p.notes || '')}</textarea></label>
-   ${A ? `<div class="row-end">${p.closed ? '<button class="btn sm" id="pReopen">Reopen</button>' : '<button class="btn sm" id="pClose">Close</button><button class="btn sm" id="pRenew">Renew</button>'}<button class="btn primary sm" id="pSave">Save package</button></div>` : '<p class="small muted" style="margin:0">Only a super admin can change package details.</p>'}</div>
+   ${A ? `<div class="row-end">${p.closed ? '<button class="btn sm" id="pReopen">Reopen</button>' : `${p.kind === 'trial' && !(p.log || []).length ? `<button class="btn sm primary" data-book-trial="${esc(id)}">Book trial time</button>` : ''}<button class="btn sm" id="pClose">Close</button><button class="btn sm" id="pRenew">Renew</button>`}<button class="btn primary sm" id="pSave">Save package</button></div>` : '<p class="small muted" style="margin:0">Only a super admin can change package details.</p>'}</div>
    <div class="sect"><h3>Weekly times with ${esc(tname(p.teacherId))}</h3><div class="small">${slotsOf(p.teacherId).filter(x => x.studentId === p.studentId).map(x => `${DAYS[x.day]} ${fmtT(x.start)} (${x.dur} min)${x.status === 'tentative' ? ' · not confirmed' : ''}`).join('<br>') || '<span class="muted">Not on the timetable.</span>'}</div>
    <div><button class="btn sm" data-open-stu="${esc(p.studentId)}">Open student</button></div></div>
    ${A ? paymentsSect(S.payments.filter(x => x.package_id === id), p.studentId, id) : ''}
@@ -1299,12 +1303,46 @@ function drawModal() {
       const no = $('#mNo').value.trim(), tm = $('#mTm').value || null, du = Math.max(5, Math.min(240, +$('#mDu').value || 45)); closeOverlay();
       await setLog(p.id, d, st, no, tm, du).then(() => toast('Lesson logged')).catch(() => {});
     };
+  } else if (kind === 'trial') {
+    // A trial is its own thing: a one-lesson Trial package with that lesson booked on a date and time.
+    const tp = ctx.pid ? S.packages[ctx.pid] : null;
+    shell(tp ? 'Book trial time' : 'Book trial lesson', '', `<div class="grid2"><label class="f">Student<select id="mSt" ${tp ? 'disabled' : ''}>${stuOptions(ctx.studentId || '')}</select></label><label class="f">Teacher<select id="mT">${teaOptions(ctx.teacherId || S.weekTeacher || teacherIds()[0])}</select></label>
+     <label class="f">Date<input type="date" id="mD" min="${kwToday()}" value="${esc(ctx.date || kwToday())}"></label><label class="f">Time<input type="time" id="mTm" step="300"></label>
+     <label class="f">Length (min)<input type="number" id="mDu" min="5" max="240" step="5" value="30"></label>
+     ${tp ? '' : `<label class="f">Price (KWD)<input type="number" id="mPr" min="0" step="0.001"></label><label class="f">Payment<select id="mP">${Object.entries(PAY).map(([k, v]) => `<option value="${k}" ${k === 'unpaid' ? 'selected' : ''}>${v[0]}</option>`).join('')}</select></label>`}</div>
+     <label class="f">Note<input type="text" id="mNo" placeholder="e.g. piano, beginner"></label>
+     ${tp ? '' : '<p class="small muted" style="margin:0">New student? Add them first in Students, then book the trial.</p>'}
+     <div id="mClash"></div><div class="row-end">${cancel}<button class="btn primary" id="mOk">Book trial</button></div>`, true);
+    const check = () => {
+      const sid = $('#mSt').value, tid = $('#mT').value, d = $('#mD').value, tm = $('#mTm').value, du = Math.max(5, Math.min(240, +$('#mDu').value || 30));
+      if (!tid || !d) { $('#mClash').innerHTML = ''; return; }
+      const cl = tm ? clashesFor(tid, sid, d, tm, du) : []; const gaps = freeGaps(tid, d, du);
+      $('#mClash').innerHTML = (cl.length ? `<div class="warnbox" role="alert" style="margin-top:8px"><b>⚠ Clash.</b> ${esc(clashText(cl, tid))}. Pick a free time below, or book it anyway if this is intended.</div>` : tm ? `<div class="small" style="color:var(--ok)">✓ ${esc(tname(tid))}${sid ? ` and ${esc(sname(sid))} are` : ' is'} free at this time.</div>` : '')
+        + `<div class="small muted" style="margin-top:6px">Free for ${esc(tname(tid))} on ${esc(fmtD(d))}: ${gaps.length ? gaps.map(([a, b]) => `<button type="button" class="btn sm ghost" data-gap="${toT(a)}" title="Use ${esc(fmtT(a))}">${fmtTs(a)}–${fmtT(b)}</button>`).join(' ') : 'no gap long enough.'}</div>`;
+      $('#mClash').querySelectorAll('[data-gap]').forEach(b => b.onclick = () => { $('#mTm').value = b.dataset.gap; check(); });
+      $('#mOk').textContent = cl.length ? 'Book anyway' : 'Book trial';
+    };
+    ['mT', 'mSt', 'mD'].forEach(i => $('#' + i).onchange = check); $('#mDu').oninput = check; $('#mTm').oninput = check; $('#mTm').onchange = check; check();
+    $('#mOk').onclick = async () => {
+      const sid = tp ? tp.studentId : $('#mSt').value, tid = $('#mT').value, d = $('#mD').value, tm = $('#mTm').value;
+      if (!sid) return toast('Choose a student'); if (!tid) return toast('Add a teacher first'); if (!d) return toast('Pick the trial date'); if (isPast(d)) return toast('Pick today or a later date'); if (!tm) return toast('Pick the trial time');
+      const btn = $('#mOk'); if (btn.disabled) return; btn.disabled = true;
+      const du = Math.max(5, Math.min(240, +$('#mDu').value || 30)); const note = $('#mNo').value.trim();
+      const id = tp ? ctx.pid : `${tid}--${sid}--${Date.now().toString(36)}`;
+      try {
+        if (tp) await run(sb.from('packages').update({ teacher_id: tid, start_date: d, end_date: d }).eq('id', id));
+        else await run(sb.from('packages').insert({ id, student_id: sid, teacher_id: tid, subject: '', kind: 'trial', sessions: 1, per_week: 1, start_date: d, end_date: d, term: '', payment: $('#mP').value, price: $('#mPr').value === '' ? null : +$('#mPr').value, notes: note }));
+        await run(sb.from('lessons').insert({ package_id: id, lesson_date: d, status: 'present', note: note || 'Trial lesson', start_time: tm, dur: du }));
+        toast(`Trial booked: ${sname(sid)} with ${tname(tid)}, ${fmtD(d)} at ${fmtT(tm)}`); closeOverlay();
+      } catch (e) { btn.disabled = false; }
+    };
   } else if (kind === 'resched') {
     // Move an upcoming makeup to another date or time. It stays the same lesson, so the makeup owed is unchanged.
     const p = S.packages[ctx.pid]; const e = (p?.log || []).find(x => x.id === ctx.lessonId);
     if (!p || !e) { closeOverlay(); return toast('That lesson no longer exists'); }
     const tid = p.teacherId, sid = p.studentId;
-    shell('Reschedule makeup', '', `<p class="small muted" style="margin:0 0 8px">${esc(sname(sid))} with ${esc(tname(tid))} · now ${esc(fmtD(e.d))}${e.t ? ' ' + esc(fmtT(e.t)) : ''}</p><div class="grid2"><label class="f">New date<input type="date" id="mD" min="${kwToday()}" value="${esc(e.d)}"></label><label class="f">Time<input type="time" id="mTm" step="300" value="${esc(e.t || '')}"></label>
+    const what = p.kind === 'trial' ? 'trial' : 'makeup';
+    shell(`Reschedule ${what}`, '', `<p class="small muted" style="margin:0 0 8px">${esc(sname(sid))} with ${esc(tname(tid))} · now ${esc(fmtD(e.d))}${e.t ? ' ' + esc(fmtT(e.t)) : ''}</p><div class="grid2"><label class="f">New date<input type="date" id="mD" min="${kwToday()}" value="${esc(e.d)}"></label><label class="f">Time<input type="time" id="mTm" step="300" value="${esc(e.t || '')}"></label>
      <label class="f">Length (min)<input type="number" id="mDu" min="5" max="240" step="5" value="${e.du || defDur(sid, tid)}"></label></div>
      <div id="mClash"></div><div class="row-end">${cancel}<button class="btn primary" id="mOk">Reschedule</button></div>`, true);
     const check = () => {
@@ -1324,7 +1362,7 @@ function drawModal() {
       if (d !== e.d && slotsOf(tid).some(x => x.studentId === sid && x.day === wd(d))) return toast(`${sname(sid)} already has a weekly lesson with ${tname(tid)} on ${DAYS[wd(d)]}s. Pick another day.`);
       const moved = d !== e.d ? `Moved from ${fmtD(e.d)}` : ''; const note = moved ? [e.n, moved].filter(Boolean).join(' · ') : e.n || '';
       closeOverlay();
-      await run(sb.from('lessons').update({ lesson_date: d, start_time: tm, dur: tm ? du : null, note }).eq('id', e.id), 'Makeup rescheduled').catch(() => {});
+      await run(sb.from('lessons').update({ lesson_date: d, start_time: tm, dur: tm ? du : null, note }).eq('id', e.id), `${what === 'trial' ? 'Trial' : 'Makeup'} rescheduled`).catch(() => {});
     };
   } else if (kind === 'slot') {
     const tid = ctx.teacherId; const ex = ctx.slotId ? slotsOf(tid).find(s => s.id === ctx.slotId) : null; const editable = canEditSlots(tid);
@@ -1367,12 +1405,13 @@ function drawModal() {
 /* ---------- global click delegation ---------- */
 document.addEventListener('click', async e => {
   if (e.target.closest('a.pbtn')) return;
-  const t = e.target.closest('[data-att-report],[data-pay-receipt],[data-open-pkg],[data-open-stu],[data-mark],[data-new-pkg],[data-goto-date],[data-add-slot],[data-edit-slot],[data-close],[data-resched]'); if (!t) return;
+  const t = e.target.closest('[data-att-report],[data-pay-receipt],[data-open-pkg],[data-open-stu],[data-mark],[data-new-pkg],[data-goto-date],[data-add-slot],[data-edit-slot],[data-close],[data-resched],[data-book-trial]'); if (!t) return;
   if (t.hasAttribute('data-close')) return closeOverlay();
   if (t.dataset.attReport) { const [sid, pid] = t.dataset.attReport.split('|'); return openModal('report', { sid, pids: pid ? [pid] : payPkgs(sid).filter(p => !p.closed).map(p => p.id) }); }
   if (t.dataset.payReceipt) { e.preventDefault(); e.stopPropagation(); return openModal('receipt', { payId: t.dataset.payReceipt }); }
   if (t.dataset.openPkg) { e.preventDefault(); return openDrawer('package', t.dataset.openPkg); }
   if (t.dataset.openStu) { e.preventDefault(); return openDrawer('student', t.dataset.openStu); }
+  if (t.dataset.bookTrial) { const p = S.packages[t.dataset.bookTrial]; return openModal('trial', { pid: t.dataset.bookTrial, studentId: p?.studentId, teacherId: p?.teacherId, date: p?.start && !isPast(p.start) ? p.start : kwToday() }); }
   if (t.dataset.newPkg) { const [sid, tid] = t.dataset.newPkg.split('|'); return openModal('newpkg', { studentId: sid, teacherId: tid }); }
   if (t.dataset.resched) { e.preventDefault(); const [pid, lessonId] = t.dataset.resched.split('|'); return openModal('resched', { pid, lessonId }); }
   if (t.dataset.gotoDate) { S.date = t.dataset.gotoDate; S.tab = 'today'; render(); window.scrollTo(0, 0); return; }
