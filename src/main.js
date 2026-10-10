@@ -1208,10 +1208,13 @@ function drawModal() {
      <label class="f">Reason for the correction (required)<textarea id="cR" style="min-height:70px" placeholder="e.g. Marked the wrong student by mistake"></textarea></label>
      <div class="row-end"><button class="btn danger" id="cDel" style="margin-right:auto">Remove this mark</button>${cancel}<button class="btn primary" id="cOk">Save correction</button></div>`, true);
     const reason = () => { const r = $('#cR').value.trim(); if (!r) { toast('Please give a reason'); $('#cR').focus(); } return r; };
-    $('#cOk').onclick = async () => { const r = reason(); if (!r) return; const d = $('#cD').value; if (!d) return toast('Pick a date'); backFromModal();
-      const tm = $('#cT').value, du = Math.max(5, Math.min(240, +$('#cDu').value || 45)); const timeChanged = (tm || null) !== (e.t || null) || (tm && du !== (e.du || null));
+    $('#cOk').onclick = async () => { const r = reason(); if (!r) return; const d = $('#cD').value; if (!d) return toast('Pick a date');
+      // Read the form before closing it: closing re-draws the package and the fields are gone.
+      const status = $('#cS').value, note = $('#cN').value.trim(), tm = $('#cT').value, du = Math.max(5, Math.min(240, +$('#cDu').value || 45));
+      const timeChanged = (tm || null) !== (e.t || null) || (!!tm && du !== (e.du || null));
+      backFromModal();
       try {
-        await run(sb.rpc('correct_lesson', { p_id: e.id, p_status: $('#cS').value, p_note: $('#cN').value.trim(), p_date: d, p_reason: r }));
+        await run(sb.rpc('correct_lesson', { p_id: e.id, p_status: status, p_note: note, p_date: d, p_reason: r }));
         if (timeChanged) await run(sb.rpc('correct_lesson_time', { p_id: e.id, p_time: tm, p_dur: du, p_reason: r }));
         toast('Attendance corrected');
       } catch (err) { /* toast shown */ }
@@ -1232,10 +1235,10 @@ function drawModal() {
   } else if (kind === 'newteacher') {
     shell('Add teacher', '', `<label class="f">Name<input type="text" id="mN" placeholder="Ms. …"></label><label class="f">Instruments or subjects<input type="text" id="mS"></label><div class="row-end">${cancel}<button class="btn primary" id="mOk">Add teacher</button></div>`, true);
     $('#mOk').onclick = async () => {
-      const name = $('#mN').value.trim(); if (!name) return toast('Enter a name'); const id = slug(name) + '-' + rid();
+      const name = $('#mN').value.trim(); if (!name) return toast('Enter a name'); const id = slug(name) + '-' + rid(); const subjects = $('#mS').value.trim();
       const palette = ['#6b3d78', '#a8722a', '#8c3b4a', '#3f6b5a', '#2f5373', '#7a5c2e', '#5a2f5e', '#4a6b7a'];
       backFromModal();
-      await run(sb.from('teachers').insert({ id, name, subjects: $('#mS')?.value?.trim() || '', color: palette[Object.keys(S.teachers).length % palette.length], sort_order: Object.keys(S.teachers).length + 1 }), 'Teacher added').catch(() => {});
+      await run(sb.from('teachers').insert({ id, name, subjects, color: palette[Object.keys(S.teachers).length % palette.length], sort_order: Object.keys(S.teachers).length + 1 }), 'Teacher added').catch(() => {});
     };
   } else if (kind === 'newpkg') {
     const old = ctx.renewOf ? S.packages[ctx.renewOf] : null; const os = old ? stats(old) : null;
