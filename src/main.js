@@ -1236,46 +1236,29 @@ function drawModal() {
      <label class="f">Type<select id="mK">${Object.entries(KINDS).map(([k, v]) => `<option value="${k}" ${(old?.kind || 'semester') === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
      <label class="f">Lessons in package<input type="number" id="mNn" min="1" value="${esc(old?.sessions || 30)}"></label>
      <label class="f">Lessons per week<input type="number" id="mW" min="1" max="7" value="${esc(old?.perWeek || 2)}"></label>
-     <label class="f"><span id="mSL">Start date</span><input type="date" id="mS" value="${kwToday()}"></label>
-     <label class="f" id="mEf">End date<input type="date" id="mE" value=""></label>
-     ${old ? '' : `<label class="f" data-trial hidden>Trial time<input type="time" id="mTm" step="300"></label><label class="f" data-trial hidden>Length (min)<input type="number" id="mDu" min="5" max="240" step="5" value="30"></label>`}
+     <label class="f">Start date<input type="date" id="mS" value="${kwToday()}"></label>
+     <label class="f">End date<input type="date" id="mE" value=""></label>
      <label class="f">Term or month<input type="text" id="mTerm" value="${esc(old?.term && old.kind === 'semester' ? old.term : (S.settings.term || ''))}"></label>
      <label class="f">Payment<select id="mP">${Object.entries(PAY).map(([k, v]) => `<option value="${k}" ${k === 'unpaid' ? 'selected' : ''}>${v[0]}</option>`).join('')}</select></label>
      <label class="f">Price (KWD)<input type="number" id="mPr" min="0" step="0.001"></label></div>
-     <div id="mTrial" class="small muted" hidden>The trial is booked as one lesson on this date and shows on Today and the timetable. It is marked Present; change it to Absent or No-show on the day if needed.</div><div id="mClash"></div>
-     <p class="small muted" id="mSizes" style="margin:0">Common sizes: semester 30 (twice a week) or 15 (once a week); monthly 8 or 4.</p>
+     <p class="small muted" style="margin:0">Common sizes: semester 30 (twice a week) or 15 (once a week); monthly 8 or 4.</p>
      <div class="row-end">${cancel}<button class="btn primary" id="mOk">${old ? 'Renew' : 'Create package'}</button></div>`, true);
-    const isTrial = () => !old && $('#mK').value === 'trial';
-    // A trial is one booked lesson: pick its date and time, and see whether the teacher and student are free.
-    const check = () => {
-      const tr = isTrial(); $('#mSL').textContent = tr ? 'Trial date' : 'Start date'; $('#mEf').hidden = tr; $('#mSizes').hidden = tr; $('#mTrial').hidden = !tr;
-      document.querySelectorAll('[data-trial]').forEach(el => { el.hidden = !tr; });
-      const tid = $('#mT').value, sid = $('#mSt').value, d = $('#mS').value; if (!tr || !tid || !d) { $('#mClash').innerHTML = ''; return; }
-      const tm = $('#mTm').value, du = Math.max(5, Math.min(240, +$('#mDu').value || 30));
-      const cl = tm ? clashesFor(tid, sid, d, tm, du) : []; const gaps = freeGaps(tid, d, du);
-      $('#mClash').innerHTML = (cl.length ? `<div class="warnbox" role="alert" style="margin-top:8px"><b>⚠ Clash.</b> ${esc(clashText(cl, tid))}. Pick a free time below, or book it anyway if this is intended.</div>` : tm ? `<div class="small" style="color:var(--ok)">✓ ${esc(tname(tid))}${sid ? ` and ${esc(sname(sid))} are` : ' is'} free at this time.</div>` : '')
-        + `<div class="small muted" style="margin-top:6px">Free for ${esc(tname(tid))} on ${esc(fmtD(d))}: ${gaps.length ? gaps.map(([a, b]) => `<button type="button" class="btn sm ghost" data-gap="${toT(a)}" title="Use ${esc(fmtT(a))}">${fmtTs(a)}–${fmtT(b)}</button>`).join(' ') : 'no gap long enough.'}</div>`;
-      $('#mClash').querySelectorAll('[data-gap]').forEach(b => b.onclick = () => { $('#mTm').value = b.dataset.gap; check(); });
-    };
-    const sync = () => { const k = $('#mK').value; const w = +$('#mW').value; if (k === 'semester') $('#mNn').value = w >= 2 ? 30 : 15; else if (k === 'monthly') $('#mNn').value = w >= 2 ? 8 : 4; else if (k === 'trial') { $('#mNn').value = 1; $('#mW').value = 1; } check(); };
-    $('#mK').onchange = sync; $('#mW').onchange = sync;
-    if (!old) { ['mT', 'mSt', 'mS'].forEach(i => $('#' + i).onchange = check); $('#mTm').oninput = check; $('#mTm').onchange = check; $('#mDu').oninput = check; }
-    check();
+    const sync = () => { const k = $('#mK').value; const w = +$('#mW').value; if (k === 'semester') $('#mNn').value = w >= 2 ? 30 : 15; else if (k === 'monthly') $('#mNn').value = w >= 2 ? 8 : 4; else if (k === 'trial') { $('#mNn').value = 1; $('#mW').value = 1; } };
+    // A new trial is booked in the Book trial form, which reuses a trial package the student already has.
+    $('#mK').onchange = () => { if (!old && $('#mK').value === 'trial') { modal = { kind: 'trial', ctx: { studentId: $('#mSt').value, teacherId: $('#mT').value, date: kwToday() }, prev: modal.prev }; return renderOverlay(true); } sync(); };
+    $('#mW').onchange = sync;
     $('#mOk').onclick = async () => {
       const sid = old ? old.studentId : $('#mSt').value; if (!sid) return toast('Choose a student'); const tid = $('#mT').value; if (!tid) return toast('Add a teacher first');
-      const trial = isTrial(); const tm = trial ? $('#mTm').value : ''; if (trial && !$('#mS').value) return toast('Pick the trial date'); if (trial && !tm) return toast('Pick the trial time');
-      if (trial && isPast($('#mS').value)) return toast('Pick today or a later date for the trial');
       const btn = $('#mOk'); if (btn.disabled) return; btn.disabled = true;
       const id = `${tid}--${sid}--${Date.now().toString(36)}`;
-      const row = { id, renewed_from: old ? ctx.renewOf : null, student_id: sid, teacher_id: tid, subject: old?.subject || '', kind: $('#mK').value, sessions: Math.max(1, +$('#mNn').value || 1), per_week: Math.max(1, Math.min(7, +$('#mW').value || 1)), start_date: $('#mS').value || kwToday(), end_date: trial ? $('#mS').value : $('#mE').value || null, term: $('#mTerm').value.trim(), payment: $('#mP').value, price: $('#mPr').value === '' ? null : +$('#mPr').value, notes: old && os.owed ? `${os.owed} makeup(s) still owed from the previous package.` : '' };
+      const row = { id, renewed_from: old ? ctx.renewOf : null, student_id: sid, teacher_id: tid, subject: old?.subject || '', kind: $('#mK').value, sessions: Math.max(1, +$('#mNn').value || 1), per_week: Math.max(1, Math.min(7, +$('#mW').value || 1)), start_date: $('#mS').value || kwToday(), end_date: $('#mE').value || null, term: $('#mTerm').value.trim(), payment: $('#mP').value, price: $('#mPr').value === '' ? null : +$('#mPr').value, notes: old && os.owed ? `${os.owed} makeup(s) still owed from the previous package.` : '' };
       try {
         if (old) {
           await run(sb.rpc('renew_package', { p_old: ctx.renewOf, p_new: row, p_move: renewMoves(old, row.start_date) }));
         } else {
           await run(sb.from('packages').insert(row));
-          if (trial) await run(sb.from('lessons').insert({ package_id: id, lesson_date: row.start_date, status: 'present', note: 'Trial lesson', start_time: tm, dur: Math.max(5, Math.min(240, +$('#mDu').value || 30)) }));
         }
-        toast(old ? 'Package renewed' : trial ? `Trial booked for ${fmtD(row.start_date)} at ${fmtT(tm)}` : 'Package created'); modal = null; openDrawer('package', id);
+        toast(old ? 'Package renewed' : 'Package created'); modal = null; openDrawer('package', id);
       } catch (e) { btn.disabled = false; }
     };
   } else if (kind === 'extra') {
@@ -1305,16 +1288,21 @@ function drawModal() {
     };
   } else if (kind === 'trial') {
     // A trial is its own thing: a one-lesson Trial package with that lesson booked on a date and time.
-    const tp = ctx.pid ? S.packages[ctx.pid] : null;
-    shell(tp ? 'Book trial time' : 'Book trial lesson', '', `<div class="grid2"><label class="f">Student<select id="mSt" ${tp ? 'disabled' : ''}>${stuOptions(ctx.studentId || '')}</select></label><label class="f">Teacher<select id="mT">${teaOptions(ctx.teacherId || S.weekTeacher || teacherIds()[0])}</select></label>
+    const fixed = ctx.pid && S.packages[ctx.pid] ? { id: ctx.pid, ...S.packages[ctx.pid] } : null; let tp = fixed;
+    shell(fixed ? 'Book trial time' : 'Book trial lesson', '', `<div class="grid2"><label class="f">Student<select id="mSt" ${fixed ? 'disabled' : ''}>${stuOptions(ctx.studentId || '')}</select></label><label class="f">Teacher<select id="mT">${teaOptions(ctx.teacherId || S.weekTeacher || teacherIds()[0])}</select></label>
      <label class="f">Date<input type="date" id="mD" min="${kwToday()}" value="${esc(ctx.date || kwToday())}"></label><label class="f">Time<input type="time" id="mTm" step="300"></label>
      <label class="f">Length (min)<input type="number" id="mDu" min="5" max="240" step="5" value="30"></label>
-     ${tp ? '' : `<label class="f">Price (KWD)<input type="number" id="mPr" min="0" step="0.001"></label><label class="f">Payment<select id="mP">${Object.entries(PAY).map(([k, v]) => `<option value="${k}" ${k === 'unpaid' ? 'selected' : ''}>${v[0]}</option>`).join('')}</select></label>`}</div>
+     ${fixed ? '' : `<label class="f" data-newtrial>Price (KWD)<input type="number" id="mPr" min="0" step="0.001"></label><label class="f" data-newtrial>Payment<select id="mP">${Object.entries(PAY).map(([k, v]) => `<option value="${k}" ${k === 'unpaid' ? 'selected' : ''}>${v[0]}</option>`).join('')}</select></label>`}</div>
      <label class="f">Note<input type="text" id="mNo" placeholder="e.g. piano, beginner"></label>
-     ${tp ? '' : '<p class="small muted" style="margin:0">New student? Add them first in Students, then book the trial.</p>'}
+     <div id="mHas" class="infobox" hidden></div>
+     ${fixed ? '' : '<p class="small muted" style="margin:0">New student? Add them first in Students, then book the trial.</p>'}
      <div id="mClash"></div><div class="row-end">${cancel}<button class="btn primary" id="mOk">Book trial</button></div>`, true);
     const check = () => {
       const sid = $('#mSt').value, tid = $('#mT').value, d = $('#mD').value, tm = $('#mTm').value, du = Math.max(5, Math.min(240, +$('#mDu').value || 30));
+      // A student who already has a trial package with nothing booked gets the time added to it, not a second package.
+      tp = fixed || (sid ? pkgList().filter(p => p.studentId === sid && p.kind === 'trial' && !p.closed && !(p.log || []).length).sort((a, b) => (a.start || '').localeCompare(b.start || ''))[0] : null) || null;
+      document.querySelectorAll('[data-newtrial]').forEach(el => { el.hidden = !!tp; });
+      $('#mHas').hidden = !tp; if (tp) { const ps = stats(tp); $('#mHas').innerHTML = `Books the time on ${esc(sname(tp.studentId))}'s trial package ${esc(pkgRef(tp))}${tp.price != null ? ` · ${esc(kd(tp.price))}` : ''} · ${esc(PAY[tp.payment]?.[0] || '')}${ps.paidSum ? ` (${esc(kd(ps.paidSum))} recorded)` : ''}. No new package or payment.`; }
       if (!tid || !d) { $('#mClash').innerHTML = ''; return; }
       const cl = tm ? clashesFor(tid, sid, d, tm, du) : []; const gaps = freeGaps(tid, d, du);
       $('#mClash').innerHTML = (cl.length ? `<div class="warnbox" role="alert" style="margin-top:8px"><b>⚠ Clash.</b> ${esc(clashText(cl, tid))}. Pick a free time below, or book it anyway if this is intended.</div>` : tm ? `<div class="small" style="color:var(--ok)">✓ ${esc(tname(tid))}${sid ? ` and ${esc(sname(sid))} are` : ' is'} free at this time.</div>` : '')
@@ -1328,7 +1316,7 @@ function drawModal() {
       if (!sid) return toast('Choose a student'); if (!tid) return toast('Add a teacher first'); if (!d) return toast('Pick the trial date'); if (isPast(d)) return toast('Pick today or a later date'); if (!tm) return toast('Pick the trial time');
       const btn = $('#mOk'); if (btn.disabled) return; btn.disabled = true;
       const du = Math.max(5, Math.min(240, +$('#mDu').value || 30)); const note = $('#mNo').value.trim();
-      const id = tp ? ctx.pid : `${tid}--${sid}--${Date.now().toString(36)}`;
+      const id = tp ? tp.id : `${tid}--${sid}--${Date.now().toString(36)}`;
       try {
         if (tp) await run(sb.from('packages').update({ teacher_id: tid, start_date: d, end_date: d }).eq('id', id));
         else await run(sb.from('packages').insert({ id, student_id: sid, teacher_id: tid, subject: '', kind: 'trial', sessions: 1, per_week: 1, start_date: d, end_date: d, term: '', payment: $('#mP').value, price: $('#mPr').value === '' ? null : +$('#mPr').value, notes: note }));
