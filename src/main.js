@@ -1201,13 +1201,21 @@ function drawModal() {
     const p = S.packages[ctx.pid]; const e = (p?.log || []).find(x => x.id === ctx.lessonId); if (!e) { backFromModal(); return; }
     const opts2 = Object.entries(ST).map(([k, v]) => `<option value="${k}" ${(ctx.status || e.s) === k ? 'selected' : ''}>${esc(v.label)}</option>`).join('');
     shell('Correct past attendance', '', `<p style="margin:0">${esc(sname(p.studentId))} · ${esc(tname(p.teacherId))} · ${esc(fmtD(e.d, { weekday: 'long', day: 'numeric', month: 'long' }))}<br><span class="small muted">Currently: ${esc(ST[e.s]?.label || e.s)}${e.n ? ' · ' + esc(e.n) : ''}</span></p>
-     <div class="grid2"><label class="f">Date<input type="date" id="cD" value="${esc(ctx.date || e.d)}"></label><label class="f">Status<select id="cS">${opts2}</select></label></div>
+     <div class="grid2"><label class="f">Date<input type="date" id="cD" value="${esc(ctx.date || e.d)}"></label><label class="f">Status<select id="cS">${opts2}</select></label>
+     <label class="f">Time${!e.t && lessonTime(p, e) ? ` <span class="muted" style="font-weight:400">(weekly: ${esc(lessonTime(p, e))})</span>` : ''}<input type="time" id="cT" step="300" value="${esc(e.t || '')}"></label><label class="f">Length (min)<input type="number" id="cDu" min="5" max="240" step="5" value="${esc(e.du || defDur(p.studentId, p.teacherId))}"></label></div>
+     <p class="small muted" style="margin:0">Leave the time empty for a lesson at the student's usual weekly time.</p>
      <label class="f">Note<input type="text" id="cN" value="${esc(e.n || '')}"></label>
      <label class="f">Reason for the correction (required)<textarea id="cR" style="min-height:70px" placeholder="e.g. Marked the wrong student by mistake"></textarea></label>
      <div class="row-end"><button class="btn danger" id="cDel" style="margin-right:auto">Remove this mark</button>${cancel}<button class="btn primary" id="cOk">Save correction</button></div>`, true);
     const reason = () => { const r = $('#cR').value.trim(); if (!r) { toast('Please give a reason'); $('#cR').focus(); } return r; };
     $('#cOk').onclick = async () => { const r = reason(); if (!r) return; const d = $('#cD').value; if (!d) return toast('Pick a date'); backFromModal();
-      await run(sb.rpc('correct_lesson', { p_id: e.id, p_status: $('#cS').value, p_note: $('#cN').value.trim(), p_date: d, p_reason: r }), 'Attendance corrected').catch(() => {}); renderOverlay(true); };
+      const tm = $('#cT').value, du = Math.max(5, Math.min(240, +$('#cDu').value || 45)); const timeChanged = (tm || null) !== (e.t || null) || (tm && du !== (e.du || null));
+      try {
+        await run(sb.rpc('correct_lesson', { p_id: e.id, p_status: $('#cS').value, p_note: $('#cN').value.trim(), p_date: d, p_reason: r }));
+        if (timeChanged) await run(sb.rpc('correct_lesson_time', { p_id: e.id, p_time: tm, p_dur: du, p_reason: r }));
+        toast('Attendance corrected');
+      } catch (err) { /* toast shown */ }
+      renderOverlay(true); };
     $('#cDel').onclick = async () => { const r = reason(); if (!r) return; backFromModal();
       await run(sb.rpc('remove_lesson', { p_id: e.id, p_reason: r }), 'Mark removed').catch(() => {}); renderOverlay(true); };
   } else if (kind === 'reason') {
