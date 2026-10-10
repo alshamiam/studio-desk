@@ -386,7 +386,7 @@ function attention() {
   unmarked.sort((a, b) => a.d.localeCompare(b.d) || a.start.localeCompare(b.start));
   const noPkg = [], noSlot = [];
   for (const t of teacherIds()) for (const sl of slotsOf(t)) if (sl.studentId && sl.status !== 'blocked' && !pairPkgs(sl.studentId, t).some(p => !p.closed)) noPkg.push([sl, t]);
-  for (const p of pk) if (!p.closed && !slotsOf(p.teacherId).some(sl => sl.studentId === p.studentId)) noSlot.push(p);
+  for (const p of pk) if (!p.closed && p.kind !== 'trial' && !slotsOf(p.teacherId).some(sl => sl.studentId === p.studentId)) noSlot.push(p);
   const endedL = [], endingL = []; const soon = addDays(today, 7);
   for (const p of pk) { if (p.closed || !p.end) continue; const s = stats(p); if (p.end < today) endedL.push([p, s]); else if (p.end <= soon) endingL.push([p, s]); }
   const tent = []; for (const t of teacherIds()) for (const sl of slotsOf(t)) if (sl.status === 'tentative') tent.push([sl, t]);
@@ -429,7 +429,7 @@ function renderToday() {
       const seg = p ? segButtons(p.id, d, e?.s, ['present', 'absent', 'noshow', 'cancelled']) : (isAdmin() ? `<button class="btn sm" data-new-pkg="${esc(s.studentId)}|${esc(t)}">Add package</button>` : '<span></span>');
       return [toMin(s.start), `<div class="lesson"><span class="time">${fmtTs(s.start)}–${fmtTs(end)}</span><div class="who"><b class="namecell">${avatar('student', s.studentId, 26)}<a style="color:inherit;cursor:pointer" ${p ? `data-open-pkg="${esc(p.id)}"` : `data-open-stu="${esc(s.studentId)}"`}>${esc(sname(s.studentId))}</a></b>${s.status === 'tentative' ? ' <span class="pill warn">not confirmed</span>' : ''}<span class="small muted">${info}${e?.n ? ` · ${esc(e.n)}` : ''}</span></div>${seg}</div>`];
     });
-    rows = rows.concat(extras.map(p => { const e = entryFor(p, d); const st = stats(p); const du = e.du || defDur(p.studentId, t); return [e.t ? toMin(e.t) : 24 * 60, `<div class="lesson"><span class="time">${e.t ? `${fmtTs(e.t)}–${fmtTs(toMin(e.t) + du)}` : 'extra'}</span><div class="who"><b class="namecell">${avatar('student', p.studentId, 26)}<a style="color:inherit;cursor:pointer" data-open-pkg="${esc(p.id)}">${esc(sname(p.studentId))}</a></b> ${e.s === 'makeup' ? `<span class="pill blue">${isPast(d) ? 'Makeup' : 'Makeup booked'}</span>` : '<span class="pill">Makeup or extra</span>'}<span class="small muted">${st.used} of ${st.total} used${e.n ? ` · ${esc(e.n)}` : ''}</span>${e.s === 'makeup' && !isPast(d) ? `<button class="btn sm ghost" style="margin-top:4px" data-resched="${esc(p.id)}|${esc(e.id)}">↻ Reschedule</button>` : ''}</div>${segButtons(p.id, d, e.s, ['present', 'absent', 'noshow', 'cancelled'], 'makeup')}</div>`]; })).sort((a, b) => a[0] - b[0]).map(r => r[1]).join('');
+    rows = rows.concat(extras.map(p => { const e = entryFor(p, d); const st = stats(p); const du = e.du || defDur(p.studentId, t); return [e.t ? toMin(e.t) : 24 * 60, `<div class="lesson"><span class="time">${e.t ? `${fmtTs(e.t)}–${fmtTs(toMin(e.t) + du)}` : 'extra'}</span><div class="who"><b class="namecell">${avatar('student', p.studentId, 26)}<a style="color:inherit;cursor:pointer" data-open-pkg="${esc(p.id)}">${esc(sname(p.studentId))}</a></b> ${p.kind === 'trial' ? `<span class="pill blue">${isPast(d) ? 'Trial lesson' : 'Trial booked'}</span>` : e.s === 'makeup' ? `<span class="pill blue">${isPast(d) ? 'Makeup' : 'Makeup booked'}</span>` : '<span class="pill">Makeup or extra</span>'}<span class="small muted">${st.used} of ${st.total} used${e.n ? ` · ${esc(e.n)}` : ''}</span>${e.s === 'makeup' && !isPast(d) ? `<button class="btn sm ghost" style="margin-top:4px" data-resched="${esc(p.id)}|${esc(e.id)}">↻ Reschedule</button>` : ''}</div>${segButtons(p.id, d, e.s, ['present', 'absent', 'noshow', 'cancelled'], p.kind === 'trial' ? 'present' : 'makeup')}</div>`]; })).sort((a, b) => a[0] - b[0]).map(r => r[1]).join('');
     body += `<section class="tgroup"><h3>${avatar('teacher', t, 30)}${esc(tname(t))}</h3><div class="card">${rows}</div></section>`;
   }
   if (!any) body = `<div class="card empty">No lessons on the timetable for ${DAYS[w]}s.<br><span class="small">Use “Log makeup or extra” to record a lesson on this day.</span></div>`;
@@ -1232,27 +1232,46 @@ function drawModal() {
      <label class="f">Type<select id="mK">${Object.entries(KINDS).map(([k, v]) => `<option value="${k}" ${(old?.kind || 'semester') === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
      <label class="f">Lessons in package<input type="number" id="mNn" min="1" value="${esc(old?.sessions || 30)}"></label>
      <label class="f">Lessons per week<input type="number" id="mW" min="1" max="7" value="${esc(old?.perWeek || 2)}"></label>
-     <label class="f">Start date<input type="date" id="mS" value="${kwToday()}"></label>
-     <label class="f">End date<input type="date" id="mE" value=""></label>
+     <label class="f"><span id="mSL">Start date</span><input type="date" id="mS" value="${kwToday()}"></label>
+     <label class="f" id="mEf">End date<input type="date" id="mE" value=""></label>
+     ${old ? '' : `<label class="f" data-trial hidden>Trial time<input type="time" id="mTm" step="300"></label><label class="f" data-trial hidden>Length (min)<input type="number" id="mDu" min="5" max="240" step="5" value="30"></label>`}
      <label class="f">Term or month<input type="text" id="mTerm" value="${esc(old?.term && old.kind === 'semester' ? old.term : (S.settings.term || ''))}"></label>
      <label class="f">Payment<select id="mP">${Object.entries(PAY).map(([k, v]) => `<option value="${k}" ${k === 'unpaid' ? 'selected' : ''}>${v[0]}</option>`).join('')}</select></label>
      <label class="f">Price (KWD)<input type="number" id="mPr" min="0" step="0.001"></label></div>
-     <p class="small muted" style="margin:0">Common sizes: semester 30 (twice a week) or 15 (once a week); monthly 8 or 4.</p>
+     <div id="mTrial" class="small muted" hidden>The trial is booked as one lesson on this date and shows on Today and the timetable. It is marked Present; change it to Absent or No-show on the day if needed.</div><div id="mClash"></div>
+     <p class="small muted" id="mSizes" style="margin:0">Common sizes: semester 30 (twice a week) or 15 (once a week); monthly 8 or 4.</p>
      <div class="row-end">${cancel}<button class="btn primary" id="mOk">${old ? 'Renew' : 'Create package'}</button></div>`, true);
-    const sync = () => { const k = $('#mK').value; const w = +$('#mW').value; if (k === 'semester') $('#mNn').value = w >= 2 ? 30 : 15; else if (k === 'monthly') $('#mNn').value = w >= 2 ? 8 : 4; };
+    const isTrial = () => !old && $('#mK').value === 'trial';
+    // A trial is one booked lesson: pick its date and time, and see whether the teacher and student are free.
+    const check = () => {
+      const tr = isTrial(); $('#mSL').textContent = tr ? 'Trial date' : 'Start date'; $('#mEf').hidden = tr; $('#mSizes').hidden = tr; $('#mTrial').hidden = !tr;
+      document.querySelectorAll('[data-trial]').forEach(el => { el.hidden = !tr; });
+      const tid = $('#mT').value, sid = $('#mSt').value, d = $('#mS').value; if (!tr || !tid || !d) { $('#mClash').innerHTML = ''; return; }
+      const tm = $('#mTm').value, du = Math.max(5, Math.min(240, +$('#mDu').value || 30));
+      const cl = tm ? clashesFor(tid, sid, d, tm, du) : []; const gaps = freeGaps(tid, d, du);
+      $('#mClash').innerHTML = (cl.length ? `<div class="warnbox" role="alert" style="margin-top:8px"><b>⚠ Clash.</b> ${esc(clashText(cl, tid))}. Pick a free time below, or book it anyway if this is intended.</div>` : tm ? `<div class="small" style="color:var(--ok)">✓ ${esc(tname(tid))}${sid ? ` and ${esc(sname(sid))} are` : ' is'} free at this time.</div>` : '')
+        + `<div class="small muted" style="margin-top:6px">Free for ${esc(tname(tid))} on ${esc(fmtD(d))}: ${gaps.length ? gaps.map(([a, b]) => `<button type="button" class="btn sm ghost" data-gap="${toT(a)}" title="Use ${esc(fmtT(a))}">${fmtTs(a)}–${fmtT(b)}</button>`).join(' ') : 'no gap long enough.'}</div>`;
+      $('#mClash').querySelectorAll('[data-gap]').forEach(b => b.onclick = () => { $('#mTm').value = b.dataset.gap; check(); });
+    };
+    const sync = () => { const k = $('#mK').value; const w = +$('#mW').value; if (k === 'semester') $('#mNn').value = w >= 2 ? 30 : 15; else if (k === 'monthly') $('#mNn').value = w >= 2 ? 8 : 4; else if (k === 'trial') { $('#mNn').value = 1; $('#mW').value = 1; } check(); };
     $('#mK').onchange = sync; $('#mW').onchange = sync;
+    if (!old) { ['mT', 'mSt', 'mS'].forEach(i => $('#' + i).onchange = check); $('#mTm').oninput = check; $('#mTm').onchange = check; $('#mDu').oninput = check; }
+    check();
     $('#mOk').onclick = async () => {
       const sid = old ? old.studentId : $('#mSt').value; if (!sid) return toast('Choose a student'); const tid = $('#mT').value; if (!tid) return toast('Add a teacher first');
+      const trial = isTrial(); const tm = trial ? $('#mTm').value : ''; if (trial && !$('#mS').value) return toast('Pick the trial date'); if (trial && !tm) return toast('Pick the trial time');
+      if (trial && isPast($('#mS').value)) return toast('Pick today or a later date for the trial');
       const btn = $('#mOk'); if (btn.disabled) return; btn.disabled = true;
       const id = `${tid}--${sid}--${Date.now().toString(36)}`;
-      const row = { id, renewed_from: old ? ctx.renewOf : null, student_id: sid, teacher_id: tid, subject: old?.subject || '', kind: $('#mK').value, sessions: Math.max(1, +$('#mNn').value || 1), per_week: Math.max(1, Math.min(7, +$('#mW').value || 1)), start_date: $('#mS').value || kwToday(), end_date: $('#mE').value || null, term: $('#mTerm').value.trim(), payment: $('#mP').value, price: $('#mPr').value === '' ? null : +$('#mPr').value, notes: old && os.owed ? `${os.owed} makeup(s) still owed from the previous package.` : '' };
+      const row = { id, renewed_from: old ? ctx.renewOf : null, student_id: sid, teacher_id: tid, subject: old?.subject || '', kind: $('#mK').value, sessions: Math.max(1, +$('#mNn').value || 1), per_week: Math.max(1, Math.min(7, +$('#mW').value || 1)), start_date: $('#mS').value || kwToday(), end_date: trial ? $('#mS').value : $('#mE').value || null, term: $('#mTerm').value.trim(), payment: $('#mP').value, price: $('#mPr').value === '' ? null : +$('#mPr').value, notes: old && os.owed ? `${os.owed} makeup(s) still owed from the previous package.` : '' };
       try {
         if (old) {
           await run(sb.rpc('renew_package', { p_old: ctx.renewOf, p_new: row, p_move: renewMoves(old, row.start_date) }));
         } else {
           await run(sb.from('packages').insert(row));
+          if (trial) await run(sb.from('lessons').insert({ package_id: id, lesson_date: row.start_date, status: 'present', note: 'Trial lesson', start_time: tm, dur: Math.max(5, Math.min(240, +$('#mDu').value || 30)) }));
         }
-        toast(old ? 'Package renewed' : 'Package created'); modal = null; openDrawer('package', id);
+        toast(old ? 'Package renewed' : trial ? `Trial booked for ${fmtD(row.start_date)} at ${fmtT(tm)}` : 'Package created'); modal = null; openDrawer('package', id);
       } catch (e) { btn.disabled = false; }
     };
   } else if (kind === 'extra') {
